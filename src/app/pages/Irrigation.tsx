@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { t } from '../utils/translations';
 import { Droplets, Power, AlertCircle, Settings, Play, Loader2, Cpu, Activity, PhoneCall } from 'lucide-react';
@@ -34,6 +34,7 @@ type IrrigationData = {
   policy: {
     crop: string;
     crop_bn: string;
+    landAreaAcres: number;
     threshold: number;
     window: string;
     maxVolume: number;
@@ -70,6 +71,7 @@ const DEFAULT_IRRIGATION: IrrigationData = {
   policy: {
     crop: 'Rice',
     crop_bn: 'ধান',
+    landAreaAcres: 1,
     threshold: 65,
     window: '6:00 AM - 8:00 AM',
     maxVolume: 150,
@@ -134,6 +136,9 @@ export const Irrigation: React.FC = () => {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [virtualDevice, setVirtualDevice] = useState<VirtualDevice | null>(null);
   const [softRefreshTick, setSoftRefreshTick] = useState(0);
+  const [landAreaInput, setLandAreaInput] = useState('1');
+  const [animatedWaterGivenLiters, setAnimatedWaterGivenLiters] = useState(0);
+  const lastRealtimeAutoTickAtRef = useRef(0);
 
   const normalizeAlarmTickThreshold = (value: unknown) => {
     const parsed = Number(value);
@@ -147,10 +152,40 @@ export const Irrigation: React.FC = () => {
     return Number.isFinite(parsed) ? parsed : 0;
   };
 
+  const normalizeLandAreaAcres = (value: unknown) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return 1;
+    return Math.max(0.1, Math.min(50, Math.round(parsed * 10) / 10));
+  };
+
+  const calculateLandAwareMaxVolume = (cropName: string, landAreaAcres: unknown) => {
+    const profile = CROP_PROFILES[cropName] || CROP_PROFILES.Rice;
+    const area = normalizeLandAreaAcres(landAreaAcres);
+    return Math.max(1, Math.round(Number(profile.maxVolume || 150) * area));
+  };
+
+  const normalizeSchedulePolicy = (schedule: any) => {
+    if (!schedule) return schedule;
+    const cropName = String(schedule?.policy?.crop || 'Rice');
+    const profile = CROP_PROFILES[cropName] || CROP_PROFILES.Rice;
+    const landAreaAcres = normalizeLandAreaAcres(schedule?.policy?.landAreaAcres ?? 1);
+    return {
+      ...schedule,
+      policy: {
+        ...(schedule.policy || {}),
+        crop: cropName,
+        crop_bn: schedule?.policy?.crop_bn || profile.crop_bn,
+        landAreaAcres,
+        maxVolume: calculateLandAwareMaxVolume(cropName, landAreaAcres),
+      },
+    };
+  };
+
   const deriveManualLitersFromSchedule = (schedule: Partial<IrrigationData> | null | undefined) => {
     const cap = Math.max(1, Number(schedule?.policy?.maxVolume || 150));
     const amountLiters = parseLitersFromAmount(String(schedule?.amount || ''));
-    const baseline = amountLiters > 0 ? amountLiters : 45;
+    const policyRecommended = Number(schedule?.policy?.maxVolume || 0);
+    const baseline = policyRecommended > 0 ? policyRecommended : (amountLiters > 0 ? amountLiters : 45);
     return Math.max(1, Math.min(cap, Math.round(baseline)));
   };
 
@@ -175,10 +210,11 @@ export const Irrigation: React.FC = () => {
       setVirtualDevice(setup.device);
     }
     if (setup?.schedule) {
-      setData(setup.schedule);
-      setAutoMode(!!setup.schedule.autoMode);
-      setSimulatedMoistureInput(Math.max(20, Math.min(95, Number(setup.schedule.moisture || 58))));
-      setManualPumpLiters(deriveManualLitersFromSchedule(setup.schedule));
+      const normalizedSchedule = normalizeSchedulePolicy(setup.schedule);
+      setData(normalizedSchedule);
+      setAutoMode(!!normalizedSchedule.autoMode);
+      setSimulatedMoistureInput(Math.max(20, Math.min(95, Number(normalizedSchedule.moisture || 58))));
+      setManualPumpLiters(deriveManualLitersFromSchedule(normalizedSchedule));
     }
     return setup?.device || null;
   };
@@ -211,8 +247,9 @@ export const Irrigation: React.FC = () => {
       }
       if (result?.device) setVirtualDevice(result.device);
       if (result?.schedule) {
-        setData(result.schedule);
-        setAutoMode(!!result.schedule.autoMode);
+        const normalizedSchedule = normalizeSchedulePolicy(result.schedule);
+        setData(normalizedSchedule);
+        setAutoMode(!!normalizedSchedule.autoMode);
       }
       setLastPumpSimulation({
         action: result?.action || 'idle',
@@ -290,6 +327,11 @@ export const Irrigation: React.FC = () => {
     return Math.round(Math.max(18, fromSimulation, fromSensorTick, fromScheduleAmount));
   }, [pumpIsActive, lastPumpSimulation?.appliedLiters, latestSensorTick?.appliedLiters, data.amount]);
 
+  const totalWaterGivenLiters = useMemo(() => {
+    const history = data.sensorHistory || [];
+    return history.reduce((sum, tick) => sum + Math.max(0, Number(tick?.appliedLiters || 0)), 0);
+  }, [data.sensorHistory]);
+
   const flowPulseDuration = useMemo(() => {
     if (!pumpIsActive) return 2.4;
     const cap = Number(data.policy?.maxVolume || 150);
@@ -315,7 +357,12 @@ export const Irrigation: React.FC = () => {
 
     let streak = 0;
     for (const tick of history) {
-      const measured = Number(tick?.measuredMoisture ?? tick?.moisture ?? 0);
+      // For watering ticks, evaluate the post-action moisture so alarm state clears once watering recovers moisture.
+      const measured = Number(
+        tick?.action === 'watering'
+          ? (tick?.moisture ?? tick?.measuredMoisture ?? 0)
+          : (tick?.measuredMoisture ?? tick?.moisture ?? 0),
+      );
       if (measured < moistureThreshold) {
         streak += 1;
         continue;
@@ -326,7 +373,7 @@ export const Irrigation: React.FC = () => {
     return streak;
   }, [data.sensorHistory, data.moisture, moistureThreshold]);
 
-  const lowMoistureAlarmActive = lowMoistureStreak >= alarmTickThreshold;
+  const lowMoistureAlarmActive = autoMode && lowMoistureStreak >= alarmTickThreshold;
   const lowMoistureDeficit = Math.max(0, Math.round(moistureThreshold - Number(data.moisture || 0)));
 
   const getActionDotColor = (action?: string) => (action === 'watering' ? '#f97316' : '#16a34a');
@@ -359,14 +406,15 @@ export const Irrigation: React.FC = () => {
     }
     try {
       const { schedule, helpLineNumber } = await getIrrigationSchedule(state.accessToken, state.user.id);
-      setData(schedule);
+      const normalizedSchedule = normalizeSchedulePolicy(schedule);
+      setData(normalizedSchedule);
       if (typeof helpLineNumber === 'string' && helpLineNumber.trim()) {
         setDeviceHelpLineNumber(helpLineNumber.trim());
       }
-      setAutoMode(!!schedule.autoMode);
-      setSimulatedMoistureInput(Math.max(20, Math.min(95, Number(schedule.moisture || 58))));
-      setManualPumpLiters(deriveManualLitersFromSchedule(schedule));
-      await refreshOrSetupVirtualDevice(schedule?.policy?.crop || 'Rice');
+      setAutoMode(!!normalizedSchedule.autoMode);
+      setSimulatedMoistureInput(Math.max(20, Math.min(95, Number(normalizedSchedule.moisture || 58))));
+      setManualPumpLiters(deriveManualLitersFromSchedule(normalizedSchedule));
+      await refreshOrSetupVirtualDevice(normalizedSchedule?.policy?.crop || 'Rice');
       setLastUpdated(new Date());
 
       // Do not block irrigation UI on location permission prompt or geolocation delays.
@@ -393,7 +441,7 @@ export const Irrigation: React.FC = () => {
             lat: coords.lat,
             lng: coords.lng,
             moisture: Number(schedule.moisture || 68),
-            crop: schedule?.policy?.crop || 'Rice',
+            crop: normalizedSchedule?.policy?.crop || 'Rice',
           });
           setYieldAdvice(advice);
         } catch (error) {
@@ -457,25 +505,101 @@ export const Irrigation: React.FC = () => {
   }, [state.user.id, state.userMode]);
 
   useEffect(() => {
+    if (!autoMode || state.userMode === 'guest' || !state.accessToken) return;
+
+    const sensedMoisture = Number(virtualDevice?.telemetry?.soilMoisture);
+    if (!Number.isFinite(sensedMoisture)) return;
+
+    const nowMs = Date.now();
+    if (nowMs - lastRealtimeAutoTickAtRef.current < 7000) return;
+    lastRealtimeAutoTickAtRef.current = nowMs;
+
+    void simulateVirtualTick(data.policy?.crop || 'Rice', {
+      measuredMoisture: sensedMoisture,
+    });
+  }, [autoMode, state.userMode, state.accessToken, data.policy?.crop, virtualDevice?.telemetry?.soilMoisture]);
+
+  useEffect(() => {
     if (!autoMode || !autoSimulation || state.userMode === 'guest' || !state.accessToken) return;
+    lastRealtimeAutoTickAtRef.current = Date.now();
     const timer = setInterval(() => {
-      void simulateVirtualTick(data.policy?.crop || 'Rice');
-    }, 20000);
+      const sensedMoisture = Number(virtualDevice?.telemetry?.soilMoisture ?? data.moisture);
+      void simulateVirtualTick(
+        data.policy?.crop || 'Rice',
+        Number.isFinite(sensedMoisture) ? { measuredMoisture: sensedMoisture } : undefined,
+      );
+    }, 10000);
     return () => clearInterval(timer);
-  }, [autoMode, autoSimulation, state.userMode, state.accessToken, data.policy?.crop, virtualDevice?.id]);
+  }, [
+    autoMode,
+    autoSimulation,
+    state.userMode,
+    state.accessToken,
+    data.policy?.crop,
+    data.moisture,
+    virtualDevice?.id,
+    virtualDevice?.telemetry?.soilMoisture,
+  ]);
+
+  useEffect(() => {
+    if (!pumpIsActive) {
+      setAnimatedWaterGivenLiters(0);
+      return;
+    }
+
+    const targetLiters = Math.max(0, Number(currentFlowLiters || 0));
+    if (!Number.isFinite(targetLiters) || targetLiters <= 0) {
+      setAnimatedWaterGivenLiters(0);
+      return;
+    }
+
+    setAnimatedWaterGivenLiters(0);
+    const stepCount = Math.max(8, Math.round((flowPulseDuration * 1000) / 160));
+    const stepSize = targetLiters / stepCount;
+    let step = 0;
+    const timer = setInterval(() => {
+      step += 1;
+      setAnimatedWaterGivenLiters((prev) => {
+        const next = prev + stepSize;
+        return next >= targetLiters ? targetLiters : next;
+      });
+      if (step >= stepCount) {
+        clearInterval(timer);
+        setAnimatedWaterGivenLiters(targetLiters);
+      }
+    }, 160);
+
+    return () => clearInterval(timer);
+  }, [pumpIsActive, currentFlowLiters, flowPulseDuration, latestSensorTick?.id, latestSensorTick?.timestamp]);
 
   const persistUpdates = async (updates: any) => {
-    if (state.userMode === 'guest' || !state.accessToken || !state.user.id) return;
+    if (state.userMode === 'guest' || !state.accessToken || !state.user.id) {
+      const localSchedule = normalizeSchedulePolicy({
+        ...data,
+        ...updates,
+        policy: {
+          ...(data.policy || {}),
+          ...(updates?.policy || {}),
+        },
+      });
+      setData(localSchedule);
+      if (typeof localSchedule?.autoMode === 'boolean') {
+        setAutoMode(localSchedule.autoMode);
+      }
+      setLastUpdated(new Date());
+      return;
+    }
 
     setSaving(true);
     try {
       const { schedule, helpLineNumber } = await updateIrrigationSchedule(state.accessToken, state.user.id, updates);
-      setData(schedule);
+      const normalizedSchedule = normalizeSchedulePolicy(schedule);
+      setData(normalizedSchedule);
       if (typeof helpLineNumber === 'string' && helpLineNumber.trim()) {
         setDeviceHelpLineNumber(helpLineNumber.trim());
       }
-      if (typeof schedule.autoMode === 'boolean') {
-        setAutoMode(schedule.autoMode);
+      if (typeof normalizedSchedule.autoMode === 'boolean') {
+        setAutoMode(normalizedSchedule.autoMode);
       }
       setLastUpdated(new Date());
     } catch (error) {
@@ -486,7 +610,10 @@ export const Irrigation: React.FC = () => {
   };
 
   const toggleAutoMode = async () => {
-    await persistUpdates({ autoMode: !autoMode });
+    const nextAutoMode = !autoMode;
+    setAutoMode(nextAutoMode);
+    setData((prev) => ({ ...prev, autoMode: nextAutoMode }));
+    await persistUpdates({ autoMode: nextAutoMode });
   };
 
   const waterNow = async () => {
@@ -551,18 +678,42 @@ export const Irrigation: React.FC = () => {
 
   const handleCropChange = async (nextCrop: string) => {
     const profile = CROP_PROFILES[nextCrop] || CROP_PROFILES.Rice;
+    const currentLandArea = normalizeLandAreaAcres(data.policy?.landAreaAcres ?? 1);
+    const nextMaxVolume = calculateLandAwareMaxVolume(nextCrop, currentLandArea);
+    setManualPumpLiters(nextMaxVolume);
     await persistUpdates({
       policy: {
         ...data.policy,
         crop: nextCrop,
         crop_bn: profile.crop_bn,
         threshold: profile.threshold,
-        maxVolume: profile.maxVolume,
+        landAreaAcres: currentLandArea,
+        maxVolume: nextMaxVolume,
         alarmTickThreshold,
       },
     });
     await refreshOrSetupVirtualDevice(nextCrop);
     await simulateVirtualTick(nextCrop);
+  };
+
+  const handleLandAreaChange = async (nextValue: number) => {
+    const nextLandAreaAcres = normalizeLandAreaAcres(nextValue);
+    const nextMaxVolume = calculateLandAwareMaxVolume(data.policy?.crop || 'Rice', nextLandAreaAcres);
+    setManualPumpLiters(nextMaxVolume);
+    setLandAreaInput(String(nextLandAreaAcres));
+
+    await persistUpdates({
+      policy: {
+        ...data.policy,
+        landAreaAcres: nextLandAreaAcres,
+        maxVolume: nextMaxVolume,
+        alarmTickThreshold,
+      },
+    });
+  };
+
+  const commitLandAreaInput = async () => {
+    await handleLandAreaChange(Number(landAreaInput));
   };
 
   const handleAlarmTickThresholdChange = async (nextValue: number) => {
@@ -594,6 +745,11 @@ export const Irrigation: React.FC = () => {
       forcePump: 'off',
     });
   };
+
+  useEffect(() => {
+    const nextLandArea = normalizeLandAreaAcres(data.policy?.landAreaAcres ?? 1);
+    setLandAreaInput(String(nextLandArea));
+  }, [data.policy?.landAreaAcres]);
 
   if (loading) {
     return (
@@ -636,7 +792,10 @@ export const Irrigation: React.FC = () => {
             </div>
           </div>
           {autoMode && (
-            <span className="flex items-center gap-1.5 px-3 py-1.5 bg-green-100 text-green-700 text-sm font-semibold rounded-full border border-green-200">
+            <span
+              data-testid="auto-mode-status-pill"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-green-100 text-green-700 text-sm font-semibold rounded-full border border-green-200"
+            >
               <Power className="w-4 h-4" />
               {lang === 'bn' ? 'স্বয়ংক্রিয় চালু' : 'Auto ON'}
             </span>
@@ -675,6 +834,10 @@ export const Irrigation: React.FC = () => {
             <p className="text-sm text-gray-600">{lang === 'bn' ? 'লাইভ সেচ নিয়ন্ত্রণ' : 'Live automatic irrigation control'}</p>
           </div>
           <button
+            type="button"
+            data-testid="auto-mode-toggle-btn"
+            aria-label={lang === 'bn' ? 'স্বয়ংক্রিয় মোড টগল' : 'Toggle auto mode'}
+            aria-pressed={autoMode}
             onClick={toggleAutoMode}
             disabled={saving}
             className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${
@@ -872,6 +1035,24 @@ export const Irrigation: React.FC = () => {
                       : `${lowMoistureStreak}/${alarmTickThreshold} ticks below threshold (${lowMoistureDeficit}% deficit)`}
                   </span>
                 )}
+              </div>
+              <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+                <span
+                  data-testid="pump-water-given-live"
+                  className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-blue-700"
+                >
+                  {lang === 'bn'
+                    ? `চলমান চক্রে পানি: ${animatedWaterGivenLiters.toFixed(1)}L`
+                    : `Water given (current cycle): ${animatedWaterGivenLiters.toFixed(1)}L`}
+                </span>
+                <span
+                  data-testid="pump-water-given-total"
+                  className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700"
+                >
+                  {lang === 'bn'
+                    ? `মোট দেওয়া পানি: ${totalWaterGivenLiters.toFixed(1)}L`
+                    : `Total water given: ${totalWaterGivenLiters.toFixed(1)}L`}
+                </span>
               </div>
             </div>
           </div>
@@ -1086,8 +1267,8 @@ export const Irrigation: React.FC = () => {
 
         <p className="mt-3 text-xs text-gray-600 text-center">
           {lang === 'bn'
-            ? `ওয়াটার নাউ বোতাম চাপলে ${manualPumpLiters}L ম্যানুয়াল পানির পরিমাণ প্রয়োগ হবে`
-            : `Pressing Water Now applies ${manualPumpLiters}L for manual watering`}
+            ? `ওয়াটার নাউ বোতাম চাপলে ${manualPumpLiters}L (জমির আকার ${normalizeLandAreaAcres(data.policy?.landAreaAcres ?? 1)} একর অনুযায়ী) প্রয়োগ হবে`
+            : `Pressing Water Now applies ${manualPumpLiters}L (based on ${normalizeLandAreaAcres(data.policy?.landAreaAcres ?? 1)} acre land size)`}
         </p>
       </div>
 
@@ -1135,6 +1316,26 @@ export const Irrigation: React.FC = () => {
                 value={data.policy.maxVolume}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                 readOnly
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">{lang === 'bn' ? 'জমির পরিমাণ (একর)' : 'Crop Land (Acres)'}</label>
+              <input
+                data-testid="policy-land-area-input"
+                type="number"
+                min={0.1}
+                max={50}
+                step={0.1}
+                value={landAreaInput}
+                onChange={(e) => setLandAreaInput(e.target.value)}
+                onBlur={() => void commitLandAreaInput()}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    void commitLandAreaInput();
+                  }
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
               />
             </div>
             <div>

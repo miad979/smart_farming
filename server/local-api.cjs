@@ -718,8 +718,22 @@ function getIrrigationCropPolicy(cropName) {
   return IRRIGATION_CROP_PROFILES[key] || IRRIGATION_CROP_PROFILES.Rice
 }
 
+function normalizeLandAreaAcres(value) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return 1
+  return Math.max(0.1, Math.min(50, Math.round(parsed * 10) / 10))
+}
+
+function calculateIrrigationMaxVolume(cropName, landAreaAcres) {
+  const profile = getIrrigationCropPolicy(cropName)
+  const area = normalizeLandAreaAcres(landAreaAcres)
+  const perAcreVolume = Number(profile?.maxVolume || 120)
+  return Math.max(1, Math.round(perAcreVolume * area))
+}
+
 function createDefaultIrrigationSchedule(userId, cropName = 'Rice') {
   const profile = getIrrigationCropPolicy(cropName)
+  const landAreaAcres = 1
   return {
     id: userId,
     userId,
@@ -753,7 +767,8 @@ function createDefaultIrrigationSchedule(userId, cropName = 'Rice') {
       crop_bn: profile.crop_bn,
       threshold: profile.threshold,
       window: profile.window,
-      maxVolume: profile.maxVolume,
+      landAreaAcres,
+      maxVolume: calculateIrrigationMaxVolume(profile.crop, landAreaAcres),
       alarmTickThreshold: 3,
     },
     updatedAt: nowIso(),
@@ -806,6 +821,7 @@ function normalizeAlarmTickThreshold(value) {
 function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
   const threshold = Number(schedule?.policy?.threshold || 60)
   const maxVolume = Number(schedule?.policy?.maxVolume || 120)
+  const landAreaAcres = normalizeLandAreaAcres(schedule?.policy?.landAreaAcres ?? 1)
   const forcePump = normalizeForcedPumpAction(options?.forcePump)
   const requestedLiters = Number(options?.manualLiters || 0)
   const safeRequestedLiters = Number.isFinite(requestedLiters) ? requestedLiters : 0
@@ -815,7 +831,8 @@ function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
   let reason = 'Sensor tick processed'
 
   if (forcePump === 'on') {
-    appliedLiters = Math.min(maxVolume, Math.max(10, safeRequestedLiters || 45))
+    const fallbackManualLiters = Math.max(1, Math.round(45 * landAreaAcres))
+    appliedLiters = Math.min(maxVolume, Math.max(1, safeRequestedLiters || fallbackManualLiters))
     const moistureLift = Math.max(6, Math.round(appliedLiters * 0.35))
     nextSchedule.moisture = Math.min(95, measuredMoisture + moistureLift)
     nextSchedule.amount = `${appliedLiters}L`
@@ -844,7 +861,9 @@ function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
     reason = 'Virtual pump forced OFF for simulation'
   } else if (nextSchedule.autoMode && measuredMoisture < threshold) {
     const deficit = threshold - measuredMoisture
-    appliedLiters = Math.min(maxVolume, Math.max(20, Math.round(deficit * 3.2)))
+    const minAutoLiters = Math.max(1, Math.round(20 * landAreaAcres))
+    const deficitDrivenLiters = Math.round(deficit * 3.2 * landAreaAcres)
+    appliedLiters = Math.min(maxVolume, Math.max(minAutoLiters, deficitDrivenLiters))
     nextSchedule.moisture = Math.min(95, measuredMoisture + Math.max(8, Math.round(deficit * 0.9)))
     nextSchedule.amount = `${appliedLiters}L`
     nextSchedule.nextWatering = 'Auto adjusted after sensor reading'
@@ -4223,22 +4242,23 @@ function createLocalApiMiddleware() {
         const existing = db.irrigation[userId] || createDefaultIrrigationSchedule(userId)
         let schedule = { ...existing, ...updates, id: userId, userId, updatedAt: nowIso() }
 
-        if (updates?.policy?.crop || updates?.crop) {
-          const nextCrop = updates?.policy?.crop || updates?.crop
-          const profile = getIrrigationCropPolicy(nextCrop)
-          schedule.policy = {
-            ...(schedule.policy || {}),
-            crop: profile.crop,
-            crop_bn: profile.crop_bn,
-            threshold: Number(schedule?.policy?.threshold || profile.threshold),
-            window: schedule?.policy?.window || profile.window,
-            maxVolume: Number(schedule?.policy?.maxVolume || profile.maxVolume),
-            alarmTickThreshold: normalizeAlarmTickThreshold(schedule?.policy?.alarmTickThreshold),
-          }
-        }
+        const nextCrop = updates?.policy?.crop || updates?.crop || schedule?.policy?.crop || existing?.policy?.crop || 'Rice'
+        const profile = getIrrigationCropPolicy(nextCrop)
+        const nextLandAreaAcres = normalizeLandAreaAcres(
+          updates?.policy?.landAreaAcres
+            ?? schedule?.policy?.landAreaAcres
+            ?? existing?.policy?.landAreaAcres
+            ?? 1,
+        )
 
         schedule.policy = {
           ...(schedule.policy || {}),
+          crop: profile.crop,
+          crop_bn: profile.crop_bn,
+          threshold: Number(schedule?.policy?.threshold || profile.threshold),
+          window: schedule?.policy?.window || profile.window,
+          landAreaAcres: nextLandAreaAcres,
+          maxVolume: calculateIrrigationMaxVolume(profile.crop, nextLandAreaAcres),
           alarmTickThreshold: normalizeAlarmTickThreshold(schedule?.policy?.alarmTickThreshold),
         }
 
@@ -4540,6 +4560,11 @@ function createLocalApiMiddleware() {
         }
 
         const existingSchedule = db.irrigation[authId] || createDefaultIrrigationSchedule(authId, cropProfile.crop)
+        const setupLandAreaAcres = normalizeLandAreaAcres(
+          body?.landAreaAcres
+            ?? existingSchedule?.policy?.landAreaAcres
+            ?? 1,
+        )
         const schedule = {
           ...existingSchedule,
           userId: authId,
@@ -4550,7 +4575,8 @@ function createLocalApiMiddleware() {
             crop_bn: cropProfile.crop_bn,
             threshold: Number(existingSchedule?.policy?.threshold || cropProfile.threshold),
             window: existingSchedule?.policy?.window || cropProfile.window,
-            maxVolume: Number(existingSchedule?.policy?.maxVolume || cropProfile.maxVolume),
+            landAreaAcres: setupLandAreaAcres,
+            maxVolume: calculateIrrigationMaxVolume(cropProfile.crop, setupLandAreaAcres),
             alarmTickThreshold: normalizeAlarmTickThreshold(existingSchedule?.policy?.alarmTickThreshold),
           },
           updatedAt: nowIso(),
@@ -4584,6 +4610,11 @@ function createLocalApiMiddleware() {
         const cropProfile = getIrrigationCropPolicy(cropInput)
 
         const existingSchedule = db.irrigation[authId] || createDefaultIrrigationSchedule(authId, cropProfile.crop)
+        const simulationLandAreaAcres = normalizeLandAreaAcres(
+          body?.landAreaAcres
+            ?? existingSchedule?.policy?.landAreaAcres
+            ?? 1,
+        )
         const currentMoisture = Number(existingSchedule.moisture ?? device?.telemetry?.soilMoisture ?? 68)
         const measuredInput = Number(body?.measuredMoisture)
         const hasMeasuredInput = Number.isFinite(measuredInput)
@@ -4605,7 +4636,8 @@ function createLocalApiMiddleware() {
             crop_bn: cropProfile.crop_bn,
             threshold: Number(existingSchedule?.policy?.threshold || cropProfile.threshold),
             window: existingSchedule?.policy?.window || cropProfile.window,
-            maxVolume: Number(existingSchedule?.policy?.maxVolume || cropProfile.maxVolume),
+            landAreaAcres: simulationLandAreaAcres,
+            maxVolume: calculateIrrigationMaxVolume(cropProfile.crop, simulationLandAreaAcres),
             alarmTickThreshold: normalizeAlarmTickThreshold(existingSchedule?.policy?.alarmTickThreshold),
           },
           deviceId,
@@ -4616,6 +4648,23 @@ function createLocalApiMiddleware() {
           measuredMoisture,
           { forcePump, manualLiters },
         )
+
+        // Keep critical control settings from the latest persisted schedule so sensor ticks
+        // do not revert recent UI changes due to in-flight request timing.
+        const latestPersistedSchedule = db.irrigation[authId]
+        if (latestPersistedSchedule) {
+          if (typeof latestPersistedSchedule.autoMode === 'boolean') {
+            schedule.autoMode = latestPersistedSchedule.autoMode
+          }
+          schedule.policy = {
+            ...(schedule.policy || {}),
+            alarmTickThreshold: normalizeAlarmTickThreshold(
+              latestPersistedSchedule?.policy?.alarmTickThreshold
+                ?? schedule?.policy?.alarmTickThreshold,
+            ),
+          }
+        }
+
         schedule.sensorHistory = appendSensorHistory(schedule, {
           measuredMoisture,
           moisture: schedule.moisture,

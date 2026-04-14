@@ -229,8 +229,18 @@ test.describe.serial('Role-based UI smoke checks', () => {
     await page.goto(`${APP_BASE_URL}/irrigation`, { waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('heading', { name: 'Irrigation', exact: true })).toBeVisible();
     await expect(page.getByText('Last updated')).toBeVisible();
+    const autoModeToggle = page.getByTestId('auto-mode-toggle-btn');
+    await expect(autoModeToggle).toBeVisible();
+    await expect(page.getByTestId('auto-mode-status-pill')).toBeVisible();
+    await autoModeToggle.click();
+    await expect(page.getByTestId('auto-mode-status-pill')).toHaveCount(0, { timeout: 15000 });
+    await expect(autoModeToggle).toBeEnabled({ timeout: 15000 });
+    await autoModeToggle.click();
+    await expect(page.getByTestId('auto-mode-status-pill')).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId('pump-visual-stage')).toBeVisible();
     await expect(page.getByTestId('pump-pipe-fill-overlay')).toBeVisible();
+    await expect(page.getByTestId('pump-water-given-live')).toBeVisible();
+    await expect(page.getByTestId('pump-water-given-total')).toBeVisible();
     await expect(page.getByTestId('alarm-trigger-label')).toBeVisible();
     await expect(page.getByTestId('device-helpline-call-btn')).toBeVisible();
     await expect(page.getByTestId('manual-water-amount-input')).toBeVisible();
@@ -241,6 +251,7 @@ test.describe.serial('Role-based UI smoke checks', () => {
     await page.getByTestId('manual-water-stop-btn').click();
     await expect(page.getByTestId('manual-water-latest-result')).toContainText(/stopped|OFF/i, { timeout: 15000 });
     await page.getByRole('button', { name: 'Irrigation Policy' }).click();
+    await expect(page.getByTestId('policy-land-area-input')).toBeVisible();
     await expect(page.getByTestId('alarm-tick-threshold-select')).toBeVisible();
 
     await context.close();
