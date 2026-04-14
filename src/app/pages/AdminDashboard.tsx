@@ -494,7 +494,7 @@ export const AdminDashboard: React.FC = () => {
   return (
     <div className="space-y-6 pb-20 md:pb-6">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-bold">{t('adminPanel', lang)}</h1>
           <p className="text-sm text-muted-foreground mt-1">
@@ -505,7 +505,7 @@ export const AdminDashboard: React.FC = () => {
             <Badge variant="secondary">{lang === 'bn' ? 'লাইভ কন্ট্রোল' : 'Live control'}</Badge>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" onClick={() => void refreshUsers()}>
             <RefreshCw className="w-4 h-4 mr-2" />
             {lang === 'bn' ? 'রিফ্রেশ' : 'Refresh'}
@@ -551,8 +551,8 @@ export const AdminDashboard: React.FC = () => {
       </div>
 
       <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
-        <DialogContent className="sm:max-w-4xl">
-          <DialogHeader>
+        <DialogContent className="max-h-[90vh] overflow-y-auto gap-0 p-0 sm:max-w-4xl">
+          <DialogHeader className="border-b border-border/70 px-5 pt-5 pb-4 sm:px-6">
             <DialogTitle>{lang === 'bn' ? 'অ্যাডমিন সেটিংস' : 'Admin settings'}</DialogTitle>
             <DialogDescription>
               {lang === 'bn'
@@ -561,17 +561,17 @@ export const AdminDashboard: React.FC = () => {
             </DialogDescription>
           </DialogHeader>
 
-          <Tabs value={settingsTab} onValueChange={setSettingsTab}>
-            <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="access">{lang === 'bn' ? 'অ্যাক্সেস' : 'Access'}</TabsTrigger>
-              <TabsTrigger value="governance">{lang === 'bn' ? 'প্রিভিলেজ' : 'Privileges'}</TabsTrigger>
-              <TabsTrigger value="system">{lang === 'bn' ? 'সিস্টেম' : 'System'}</TabsTrigger>
+          <Tabs value={settingsTab} onValueChange={setSettingsTab} className="px-5 pt-4 pb-5 sm:px-6">
+            <TabsList className="grid h-auto w-full grid-cols-1 gap-2 rounded-xl bg-muted/50 p-1 sm:grid-cols-3">
+              <TabsTrigger value="access" className="w-full">{lang === 'bn' ? 'অ্যাক্সেস' : 'Access'}</TabsTrigger>
+              <TabsTrigger value="governance" className="w-full">{lang === 'bn' ? 'প্রিভিলেজ' : 'Privileges'}</TabsTrigger>
+              <TabsTrigger value="system" className="w-full">{lang === 'bn' ? 'সিস্টেম' : 'System'}</TabsTrigger>
             </TabsList>
 
             <TabsContent value="access" className="space-y-4 mt-4">
               <div className="grid gap-4 md:grid-cols-2">
-                <Card className="border-dashed">
-                  <CardHeader>
+                <Card className="border border-border/70 shadow-sm">
+                  <CardHeader className="pb-3">
                     <CardTitle className="text-sm flex items-center gap-2"><UserCog className="w-4 h-4" />{lang === 'bn' ? 'অ্যাক্সেস প্রদান' : 'Grant access'}</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3">
@@ -604,7 +604,7 @@ export const AdminDashboard: React.FC = () => {
                       </Select>
                     </div>
 
-                    <Button onClick={() => void grantAccess()} disabled={isActionLoading || !settingsTargetUserId} className="w-full">
+                    <Button size="sm" onClick={() => void grantAccess()} disabled={isActionLoading || !settingsTargetUserId} className="w-full">
                       {isActionLoading
                         ? (lang === 'bn' ? 'আপডেট হচ্ছে...' : 'Updating...')
                         : (lang === 'bn' ? 'অ্যাক্সেস আপডেট' : 'Update access')}
@@ -618,29 +618,29 @@ export const AdminDashboard: React.FC = () => {
                   </CardContent>
                 </Card>
 
-                <Card className="border-dashed">
-                  <CardHeader>
+                <Card className="border border-border/70 shadow-sm">
+                  <CardHeader className="pb-3">
                     <CardTitle className="text-sm flex items-center gap-2"><Crown className="w-4 h-4" />{lang === 'bn' ? 'নির্বাচিত ইউজার কুইক অ্যাকশন' : 'Selected user quick actions'}</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3 text-sm">
                     {selectedSettingsUser ? (
                       <>
                         <p><span className="text-gray-500">{lang === 'bn' ? 'নাম:' : 'Name:'}</span> <span className="font-medium">{selectedSettingsUser.name}</span></p>
-                        <p><span className="text-gray-500">Email:</span> <span className="font-medium">{selectedSettingsUser.email}</span></p>
+                        <p><span className="text-gray-500">Email:</span> <span className="font-medium break-all">{selectedSettingsUser.email}</span></p>
                         <p><span className="text-gray-500">{lang === 'bn' ? 'বর্তমান ভূমিকা:' : 'Current role:'}</span> <span className="font-medium">{getRoleLabel(selectedSettingsUser.role, selectedSettingsUser.role_bn)}</span></p>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          <Button variant="outline" onClick={() => void updateUserRole(selectedSettingsUser.id, 'admin')} disabled={isActionLoading || selectedSettingsUser.role === 'admin'}>
+                          <Button size="sm" variant="outline" onClick={() => void updateUserRole(selectedSettingsUser.id, 'admin')} disabled={isActionLoading || selectedSettingsUser.role === 'admin'}>
                             {lang === 'bn' ? 'অ্যাডমিন বানান' : 'Make Admin'}
                           </Button>
-                          <Button variant="outline" onClick={() => void updateUserRole(selectedSettingsUser.id, 'farmer')} disabled={isActionLoading || selectedSettingsUser.role === 'farmer'}>
+                          <Button size="sm" variant="outline" onClick={() => void updateUserRole(selectedSettingsUser.id, 'farmer')} disabled={isActionLoading || selectedSettingsUser.role === 'farmer'}>
                             {lang === 'bn' ? 'ফার্মার করুন' : 'Set Farmer'}
                           </Button>
-                          <Button variant="outline" onClick={() => void updateUserRole(selectedSettingsUser.id, 'doctor')} disabled={isActionLoading || selectedSettingsUser.role === 'doctor'}>
+                          <Button size="sm" variant="outline" onClick={() => void updateUserRole(selectedSettingsUser.id, 'doctor')} disabled={isActionLoading || selectedSettingsUser.role === 'doctor'}>
                             {lang === 'bn' ? 'ডাক্তার করুন' : 'Set Doctor'}
                           </Button>
                           {isPrimaryAdmin && (
-                            <Button variant="outline" onClick={() => void updateUserRole(selectedSettingsUser.id, 'super_admin')} disabled={isActionLoading || selectedSettingsUser.role === 'super_admin'}>
+                            <Button size="sm" variant="outline" onClick={() => void updateUserRole(selectedSettingsUser.id, 'super_admin')} disabled={isActionLoading || selectedSettingsUser.role === 'super_admin'}>
                               {lang === 'bn' ? 'সুপার ইউজার করুন' : 'Make Super User'}
                             </Button>
                           )}
@@ -655,8 +655,8 @@ export const AdminDashboard: React.FC = () => {
             </TabsContent>
 
             <TabsContent value="governance" className="space-y-4 mt-4">
-              <Card className="border-dashed">
-                <CardHeader>
+              <Card className="border border-border/70 shadow-sm">
+                <CardHeader className="pb-3">
                   <CardTitle className="text-sm">{lang === 'bn' ? 'প্রিভিলেজড অ্যাকাউন্ট' : 'Privileged accounts'}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
@@ -669,7 +669,7 @@ export const AdminDashboard: React.FC = () => {
                             <p className="text-sm text-muted-foreground">{user.email}</p>
                               <p className="text-xs text-muted-foreground">{lang === 'bn' ? 'ভূমিকা:' : 'Role:'} {getRoleLabel(user.role, user.role_bn)}</p>
                         </div>
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap gap-2">
                           {user.role !== 'admin' && (
                             <Button variant="outline" size="sm" disabled={isActionLoading || !canAdjust} onClick={() => void updateUserRole(user.id, 'admin')}>
                               {lang === 'bn' ? 'অ্যাডমিন' : 'Admin'}
@@ -692,8 +692,8 @@ export const AdminDashboard: React.FC = () => {
             </TabsContent>
 
             <TabsContent value="system" className="space-y-4 mt-4">
-              <Card className="border-dashed">
-                <CardHeader>
+              <Card className="border border-border/70 shadow-sm">
+                <CardHeader className="pb-3">
                   <CardTitle className="text-sm">{lang === 'bn' ? 'ডিভাইস হেল্পলাইন নম্বর' : 'Device help line number'}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
@@ -711,6 +711,7 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button
+                      size="sm"
                       data-testid="admin-device-helpline-save-btn"
                       onClick={() => void saveDeviceHelpLine()}
                       disabled={isHelpLineSaving || isActionLoading}
@@ -720,6 +721,7 @@ export const AdminDashboard: React.FC = () => {
                         : (lang === 'bn' ? 'হেল্পলাইন সেভ' : 'Save help line')}
                     </Button>
                     <Button
+                      size="sm"
                       variant="outline"
                       onClick={() => void refreshSensorStatuses()}
                       disabled={isSensorStatusLoading}
@@ -733,10 +735,10 @@ export const AdminDashboard: React.FC = () => {
                 </CardContent>
               </Card>
 
-              <Card className="border-dashed">
-                <CardHeader className="flex flex-row items-center justify-between">
+              <Card className="border border-border/70 shadow-sm">
+                <CardHeader className="flex flex-col items-start gap-2 pb-3 sm:flex-row sm:items-center sm:justify-between">
                   <CardTitle className="text-sm">{lang === 'bn' ? 'সিস্টেম হেলথ' : 'System health'}</CardTitle>
-                  <Button variant="outline" size="sm" onClick={() => { void refreshSystemHealth(); void refreshAuditLogs(); }} disabled={isHealthLoading}>
+                  <Button variant="outline" size="sm" className="w-full sm:w-auto" onClick={() => { void refreshSystemHealth(); void refreshAuditLogs(); }} disabled={isHealthLoading}>
                     <RefreshCw className="w-4 h-4 mr-2" />
                     {isHealthLoading ? (lang === 'bn' ? 'লোড হচ্ছে...' : 'Refreshing...') : (lang === 'bn' ? 'রিফ্রেশ' : 'Refresh')}
                   </Button>
@@ -761,8 +763,8 @@ export const AdminDashboard: React.FC = () => {
                 </CardContent>
               </Card>
 
-              <Card className="border-dashed">
-                <CardHeader>
+              <Card className="border border-border/70 shadow-sm">
+                <CardHeader className="pb-3">
                   <CardTitle className="text-sm">{lang === 'bn' ? 'অডিট লগ' : 'Audit log'}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2 max-h-72 overflow-y-auto">
@@ -786,8 +788,8 @@ export const AdminDashboard: React.FC = () => {
                 </CardContent>
               </Card>
 
-              <Card className="border-dashed">
-                <CardHeader>
+              <Card className="border border-border/70 shadow-sm">
+                <CardHeader className="pb-3">
                   <CardTitle className="text-sm">{lang === 'bn' ? 'মেইন অ্যাডমিন পাওয়ার' : 'Main admin power'}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2 text-sm text-muted-foreground">
@@ -803,11 +805,11 @@ export const AdminDashboard: React.FC = () => {
             </TabsContent>
           </Tabs>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsSettingsOpen(false)} disabled={isActionLoading}>
+          <DialogFooter className="sticky bottom-0 border-t border-border/70 bg-background/95 px-5 py-4 backdrop-blur sm:px-6">
+            <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => setIsSettingsOpen(false)} disabled={isActionLoading}>
               {lang === 'bn' ? 'বন্ধ' : 'Close'}
             </Button>
-            <Button onClick={() => void refreshUsers()} disabled={isActionLoading || isLoadingUsers}>
+            <Button size="sm" className="w-full sm:w-auto" onClick={() => void refreshUsers()} disabled={isActionLoading || isLoadingUsers}>
               {isLoadingUsers
                 ? (lang === 'bn' ? 'রিফ্রেশ হচ্ছে...' : 'Refreshing...')
                 : (lang === 'bn' ? 'ইউজার রিফ্রেশ' : 'Refresh users')}
@@ -1236,7 +1238,7 @@ export const AdminDashboard: React.FC = () => {
           )}
 
           {/* Search and Filters */}
-          <div className="flex flex-col md:flex-row gap-3 mb-4">
+          <div className="mb-4 flex flex-col gap-3 md:flex-row">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
@@ -1246,7 +1248,7 @@ export const AdminDashboard: React.FC = () => {
                 className="pl-9"
               />
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button
                 variant={selectedRole === 'all' ? 'default' : 'outline'}
                 size="sm"
@@ -1305,8 +1307,8 @@ export const AdminDashboard: React.FC = () => {
           </div>
 
           {/* Users Table */}
-          <div className="overflow-x-auto">
-            <table className="w-full">
+          <div className="overflow-x-auto rounded-lg border border-border/60">
+            <table className="w-full min-w-[760px]">
               <thead>
                 <tr className="border-b">
                   <th className="text-left py-3 px-2 text-sm font-semibold">

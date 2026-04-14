@@ -360,4 +360,40 @@ test.describe.serial('Role-based UI smoke checks', () => {
 
     await context.close();
   });
+
+  test('admin mobile settings flow remains usable @mobile', async ({ browser }) => {
+    const context = await newRoleContext(browser, adminSession, {
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+    });
+    const page = await context.newPage();
+
+    await page.goto(`${APP_BASE_URL}/admin`, { waitUntil: 'domcontentloaded' });
+    await expect(page).toHaveURL(/\/admin(?:\?.*)?$/);
+    await expect(page.getByRole('heading', { name: 'Admin Panel', exact: true })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await expect(page.getByRole('heading', { name: 'Admin settings', exact: true })).toBeVisible();
+
+    await page.getByRole('tab', { name: 'Access' }).click();
+    await expect(page.getByRole('button', { name: 'Update access' })).toBeVisible();
+
+    await page.getByRole('tab', { name: 'System' }).click();
+    await expect(page.getByTestId('admin-device-helpline-input')).toBeVisible();
+
+    const settingsDialog = page.locator('[data-slot="dialog-content"]');
+    await expect(settingsDialog).toBeVisible();
+    const canScroll = await settingsDialog.evaluate((el) => el.scrollHeight > el.clientHeight);
+    expect(canScroll).toBeTruthy();
+    await settingsDialog.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+
+    await expect(page.getByRole('button', { name: 'Refresh users' })).toBeVisible();
+    await page.locator('[data-slot="dialog-footer"]').getByRole('button', { name: 'Close' }).click();
+    await expect(page.getByRole('heading', { name: 'Admin settings', exact: true })).toHaveCount(0);
+
+    await context.close();
+  });
 });

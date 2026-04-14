@@ -435,6 +435,236 @@ Result:
   - npm run test:ui: pass (5/5)
   - no diagnostics errors in modified files
 
+  ## 7A) Requested Full Testing Matrix Update (2026-04-15)
+
+  This section records the exact testing titles requested and the current execution status in this workspace.
+
+  ### Unit Testing
+  - Status: Not available as a dedicated standalone suite in this repository.
+  - Evidence: no separate unit-only test runner or unit test directory is defined in package scripts.
+
+  ### Component Testing
+  - Status: Executed (behavior-focused component assertions through UI smoke).
+  - Command: `npm run test:ui`
+  - Result: PASS (5 passed).
+
+  ### Integration Testing
+  - Status: Executed.
+  - Commands:
+    - `npm run test:security`
+    - `npm run test:actions`
+  - Result: PASS.
+
+  ### System Testing
+  - Status: Executed.
+  - Commands:
+    - `npm run build`
+    - `npm run test:ui`
+  - Result: PASS.
+
+  ### Acceptance Testing (UAT)
+  - Status: Partially executed (role-flow acceptance proxy via UI smoke).
+  - Command: `npm run test:ui`
+  - Result: PASS for automated role acceptance proxies.
+  - Note: formal business stakeholder sign-off session remains manual.
+
+  ### Alpha Testing
+  - Status: Executed as internal pre-release validation using full automated suite below.
+  - Result: PASS for internal technical criteria.
+
+  ### Beta Testing
+  - Status: Not executable in this local environment.
+  - Reason: requires external user cohort and feedback cycle outside local terminal scope.
+
+  ### Functional Testing
+  - Status: Executed.
+  - Commands:
+    - `npm run test:ui`
+    - `npm run test:actions`
+  - Result: PASS.
+
+  ### Non-Functional Testing
+  - Status: Executed.
+  - Commands:
+    - `npm run test:load`
+    - `npm audit --audit-level=high`
+  - Result: PASS.
+
+  ### Performance Testing
+  - Status: Executed.
+  - Command: `npm run test:load`
+  - Result:
+    - duration: 10000ms
+    - concurrency: 25
+    - total requests: 2951
+    - unexpected error rate: 0.00%
+
+  ### Load Testing
+  - Status: Executed.
+  - Command: `npm run test:load`
+  - Result: PASS (unexpected failures: 0).
+
+  ### Stress Testing
+  - Status: Executed.
+  - Command: `LOAD_TEST_DURATION_MS=10000`, `LOAD_TEST_CONCURRENCY=60`, then `npm run test:load`
+  - Result:
+    - total requests: 1321
+    - unexpected failures: 0
+    - throttle rate: 58.67%
+    - p95 latency: 1452.64ms
+
+  ### Soak Testing
+  - Status: Executed.
+  - Command: `LOAD_TEST_DURATION_MS=60000`, `LOAD_TEST_CONCURRENCY=20`, then `npm run test:load`
+  - Result:
+    - total requests: 20361
+    - unexpected failures: 0
+    - throttle rate: 73.30%
+    - p95 latency: 109.09ms
+
+  ### Spike Testing
+  - Status: Executed.
+  - Command: `LOAD_TEST_DURATION_MS=5000`, `LOAD_TEST_CONCURRENCY=120`, then `npm run test:load`
+  - Result:
+    - total requests: 672
+    - unexpected failures: 0
+    - p95 latency: 2091.90ms
+
+  ### Security Testing
+  - Status: Executed.
+  - Commands:
+    - `npm run test:security`
+    - `npm audit --audit-level=high`
+    - production guard: `node server/check-production-env.cjs`
+  - Result: PASS.
+
+  ### Usability Testing
+  - Status: Partially executed.
+  - Evidence: role-based UI paths validated and no major blockers in automated user journeys.
+  - Note: full qualitative usability interviews require human participants.
+
+  ### Compatibility Testing
+  - Status: Executed.
+  - Commands:
+    - `npm run test:ui` (desktop)
+    - `npm run test:ui:mobile` (mobile)
+  - Result: PASS (desktop 5 passed, mobile 1 passed).
+
+  ### Regression Testing
+  - Status: Executed.
+  - Evidence: suites re-run after changes and all core automation remains green.
+
+  ### Sanity Testing
+  - Status: Executed.
+  - Commands:
+    - `npm run build`
+    - `node server/check-production-env.cjs` (with required variables)
+  - Result: PASS.
+
+  ### Smoke Testing
+  - Status: Executed.
+  - Command: `npm run test:ui`
+  - Result: PASS (5 passed).
+
+  ### Exploratory Testing
+  - Status: Partially executable in automation-only context.
+  - Note: true exploratory testing is manual by design; automated smoke and route switching were executed as proxy checks.
+
+  ### Manual Testing
+  - Status: Not fully executable via terminal automation.
+  - Reason: requires interactive human test sessions and observational feedback.
+
+  ### Automated Testing
+  - Status: Executed.
+  - Commands run in this update:
+    - `npm run build`
+    - `npm run test:security`
+    - `npm run test:actions`
+    - `npm run test:load`
+    - `npm run test:ui`
+    - `npm run test:ui:mobile`
+    - `npm audit --audit-level=high`
+    - `node server/check-production-env.cjs`
+
+  ### White Box Testing
+  - Status: Executed (script-level internal behavior validation).
+  - Evidence: server-side workflow and security scripts validate internal branches and invariants.
+
+  ### Black Box Testing
+  - Status: Executed.
+  - Evidence: role-based UI flows and API outcome checks verify observable behavior without internal code assumptions.
+
+  ### Grey Box Testing
+  - Status: Executed.
+  - Evidence: mixed domain-aware API and UI workflow checks using partial internal knowledge.
+
+  ### Codeless Testing
+  - Status: Not executed in this workspace.
+  - Reason: no codeless platform integration is configured in this repository.
+
+  ### Perfecto.io
+  - Status: Not executed.
+  - Reason: Perfecto.io account/integration is not configured in this environment.
+
+  ### Key Testing Tools
+
+  #### GeeksforGeeks
+  - Status: Informational reference only; not a test execution tool in this repository.
+
+  #### Selenium
+  - Status: Not used in this run (project uses Playwright for browser automation).
+
+  #### JIRA
+  - Status: Not executable from this local terminal (external project management system).
+
+  #### TestNG
+  - Status: Not applicable in this JavaScript/TypeScript test stack.
+
+  #### Postman
+  - Status: Tool not used directly; API verification was executed through scripted HTTP tests.
+
+  #### LoadRunner
+  - Status: Not used; load/stress/spike/soak were executed via repository load harness (`server/load-test.cjs`).
+
+## 7B) Continued Testing Run (2026-04-15)
+
+Additional full-pass execution was completed after the matrix update to confirm ongoing stability.
+
+### Core Automated Suite
+- `npm run build`: PASS
+- `npm run test:security`: PASS
+- `npm run test:actions`: PASS
+- `npm run test:load` (baseline): PASS
+  - duration: 10000ms
+  - concurrency: 25
+  - total requests: 3151
+  - unexpected failures: 0
+  - p95 latency: 222.89ms
+- `npm run test:ui`: PASS (5 passed)
+- `npm run test:ui:mobile`: PASS (1 passed)
+- `npm audit --audit-level=high`: PASS (0 vulnerabilities)
+
+### Extended Performance Suite
+- Stress (`LOAD_TEST_DURATION_MS=10000`, `LOAD_TEST_CONCURRENCY=60`): PASS
+  - total requests: 3657
+  - unexpected failures: 0
+  - throttle rate: 72.27%
+  - p95 latency: 204.81ms
+- Spike (`LOAD_TEST_DURATION_MS=5000`, `LOAD_TEST_CONCURRENCY=120`): PASS
+  - total requests: 1458
+  - unexpected failures: 0
+  - throttle rate: 66.80%
+  - p95 latency: 1211.98ms
+- Soak (`LOAD_TEST_DURATION_MS=60000`, `LOAD_TEST_CONCURRENCY=20`): PASS
+  - total requests: 24161
+  - unexpected failures: 0
+  - throttle rate: 74.07%
+  - p95 latency: 88.17ms
+
+### Production Environment Guard
+- First attempt: expected FAIL due short test secret (< 32 chars).
+- Re-run with valid secret length: PASS (`[env] Production environment check passed.`).
+
 ## 8) What Was Modified to Improve Testability
 
 ### Test infrastructure
@@ -586,7 +816,7 @@ node server/check-production-env.cjs
 
 ---
 
-Document version: 2.5
+Document version: 2.7
 Status: Active and maintained
 Last updated: 2026-04-15
 Owner: Engineering / QA
