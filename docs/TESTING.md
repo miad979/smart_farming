@@ -309,7 +309,7 @@ All testing is currently manual. Follow this comprehensive checklist before each
 To enforce merge blocking based on UI checks:
 
 1. Require this status check in branch protection:
-  UI Smoke CI / required-ui-smoke
+  required-ui-smoke
 2. Enable "Require branches to be up to date before merging".
 3. Apply the rule to main (and master if used).
 

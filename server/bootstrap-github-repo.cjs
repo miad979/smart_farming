@@ -8,7 +8,7 @@ const ownerFromEnv = process.env.GITHUB_OWNER || '';
 const repoNameFromEnv = process.env.GITHUB_REPO_NAME || '';
 const isPrivate = String(process.env.GITHUB_REPO_PRIVATE || 'true').toLowerCase() !== 'false';
 const defaultBranch = process.env.DEFAULT_BRANCH || 'main';
-const requiredCheck = process.env.REQUIRED_CHECK || 'UI Smoke CI / required-ui-smoke';
+const requiredCheck = process.env.REQUIRED_CHECK || 'required-ui-smoke';
 
 function fail(message) {
   console.error(`ERROR: ${message}`);
