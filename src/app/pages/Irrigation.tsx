@@ -147,6 +147,13 @@ export const Irrigation: React.FC = () => {
     return Number.isFinite(parsed) ? parsed : 0;
   };
 
+  const deriveManualLitersFromSchedule = (schedule: Partial<IrrigationData> | null | undefined) => {
+    const cap = Math.max(1, Number(schedule?.policy?.maxVolume || 150));
+    const amountLiters = parseLitersFromAmount(String(schedule?.amount || ''));
+    const baseline = amountLiters > 0 ? amountLiters : 45;
+    return Math.max(1, Math.min(cap, Math.round(baseline)));
+  };
+
   const refreshOrSetupVirtualDevice = async (cropName: string) => {
     if (state.userMode === 'guest' || !state.accessToken) return null;
 
@@ -171,7 +178,7 @@ export const Irrigation: React.FC = () => {
       setData(setup.schedule);
       setAutoMode(!!setup.schedule.autoMode);
       setSimulatedMoistureInput(Math.max(20, Math.min(95, Number(setup.schedule.moisture || 58))));
-      setManualPumpLiters(Math.max(1, Math.min(Number(setup.schedule?.policy?.maxVolume || 150), 45)));
+      setManualPumpLiters(deriveManualLitersFromSchedule(setup.schedule));
     }
     return setup?.device || null;
   };
@@ -358,7 +365,7 @@ export const Irrigation: React.FC = () => {
       }
       setAutoMode(!!schedule.autoMode);
       setSimulatedMoistureInput(Math.max(20, Math.min(95, Number(schedule.moisture || 58))));
-      setManualPumpLiters(Math.max(1, Math.min(Number(schedule?.policy?.maxVolume || 150), 45)));
+      setManualPumpLiters(deriveManualLitersFromSchedule(schedule));
       await refreshOrSetupVirtualDevice(schedule?.policy?.crop || 'Rice');
       setLastUpdated(new Date());
 
@@ -486,6 +493,18 @@ export const Irrigation: React.FC = () => {
     const maxVolume = Math.max(1, Number(data.policy?.maxVolume || 150));
     const manualLiters = Math.max(1, Math.min(maxVolume, Math.round(Number(manualPumpLiters || 45))));
 
+    // Show immediate intent in UI so manual action feels responsive.
+    setData((prev) => ({
+      ...prev,
+      amount: `${manualLiters}L`,
+    }));
+    setVirtualDevice((prev) => (prev ? { ...prev, actuatorState: 'watering' } : prev));
+    setLastPumpSimulation({
+      action: 'watering',
+      message: lang === 'bn' ? 'ম্যানুয়াল ওয়াটারিং শুরু হয়েছে' : 'Manual watering started',
+      appliedLiters: manualLiters,
+    });
+
     if (state.userMode === 'guest' || !state.accessToken || !state.user.id) {
       const nextMoisture = Math.min(95, Number(data.moisture || 68) + Math.max(4, Math.round(manualLiters * 0.35)));
       setData((prev) => ({
@@ -508,6 +527,25 @@ export const Irrigation: React.FC = () => {
       measuredMoisture: Number(data.moisture || 68),
       forcePump: 'on',
       manualLiters,
+    });
+  };
+
+  const stopWaterNow = async () => {
+    setVirtualDevice((prev) => (prev ? { ...prev, actuatorState: 'idle' } : prev));
+    setLastPumpSimulation({
+      action: 'idle',
+      message: lang === 'bn' ? 'ম্যানুয়াল ওয়াটারিং বন্ধ করা হয়েছে' : 'Manual watering stopped',
+      appliedLiters: 0,
+    });
+
+    if (state.userMode === 'guest' || !state.accessToken || !state.user.id) {
+      setLastUpdated(new Date());
+      return;
+    }
+
+    await simulateVirtualTick(data.policy?.crop || 'Rice', {
+      measuredMoisture: Number(data.moisture || 68),
+      forcePump: 'off',
     });
   };
 
@@ -901,7 +939,7 @@ export const Irrigation: React.FC = () => {
           </div>
 
           {lastPumpSimulation?.message && (
-            <p className="mt-3 text-xs text-emerald-900">
+            <p data-testid="manual-water-latest-result" className="mt-3 text-xs text-emerald-900">
               {lang === 'bn' ? 'সর্বশেষ ফলাফল' : 'Latest Result'}: {lastPumpSimulation.message}
               {lastPumpSimulation.appliedLiters > 0 ? ` (${lastPumpSimulation.appliedLiters}L)` : ''}
             </p>
@@ -1002,7 +1040,7 @@ export const Irrigation: React.FC = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
           <label className="text-sm text-gray-700">
-            {lang === 'bn' ? 'ম্যানুয়াল পানির পরিমাণ (লিটার)' : 'Manual Water Amount (Liters)'}
+            {lang === 'bn' ? 'পরিমাণ (লিটার)' : 'Amount (Liters)'}
             <input
               data-testid="manual-water-amount-input"
               type="number"
@@ -1024,15 +1062,27 @@ export const Irrigation: React.FC = () => {
           </div>
         </div>
 
-        <button
-          data-testid="manual-water-now-btn"
-          onClick={waterNow}
-          disabled={saving || simulating}
-          className="w-full flex items-center justify-center gap-3 px-8 py-5 bg-gradient-to-r from-blue-600 to-blue-700 text-white text-base font-bold rounded-xl hover:from-blue-700 hover:to-blue-800 hover:shadow-xl transform hover:scale-[1.02] transition-all disabled:opacity-70"
-        >
-          {(saving || simulating) ? <Loader2 className="w-6 h-6 animate-spin" /> : <Play className="w-6 h-6" />}
-          {t('waterNow', lang)}
-        </button>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <button
+            data-testid="manual-water-now-btn"
+            onClick={waterNow}
+            disabled={saving || simulating}
+            className="w-full flex items-center justify-center gap-3 px-8 py-5 bg-gradient-to-r from-blue-600 to-blue-700 text-white text-base font-bold rounded-xl hover:from-blue-700 hover:to-blue-800 hover:shadow-xl transform hover:scale-[1.02] transition-all disabled:opacity-70"
+          >
+            {(saving || simulating) ? <Loader2 className="w-6 h-6 animate-spin" /> : <Play className="w-6 h-6" />}
+            {t('waterNow', lang)}
+          </button>
+
+          <button
+            data-testid="manual-water-stop-btn"
+            onClick={stopWaterNow}
+            disabled={saving || simulating}
+            className="w-full flex items-center justify-center gap-3 px-8 py-5 border border-rose-300 bg-rose-50 text-rose-700 text-base font-bold rounded-xl hover:bg-rose-100 transition-all disabled:opacity-70"
+          >
+            {(saving || simulating) ? <Loader2 className="w-6 h-6 animate-spin" /> : <Power className="w-6 h-6" />}
+            {lang === 'bn' ? 'পানি বন্ধ করুন' : 'Stop Watering'}
+          </button>
+        </div>
 
         <p className="mt-3 text-xs text-gray-600 text-center">
           {lang === 'bn'
