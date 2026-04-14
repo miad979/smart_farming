@@ -65,6 +65,14 @@ function shouldManageLocalPostgres(databaseUrl, forceStart) {
   return databaseUrl.includes('127.0.0.1:5434') || databaseUrl.includes('localhost:5434')
 }
 
+function failOrWarn(message, strictMode) {
+  if (strictMode) {
+    console.error(message)
+    process.exit(1)
+  }
+  console.warn(`${message} Continuing startup without blocking Vite.`)
+}
+
 function main() {
   loadLocalEnvFiles()
 
@@ -76,6 +84,7 @@ function main() {
 
   const databaseUrl = (process.env.DATABASE_URL || process.env.POSTGRES_URL || '').trim()
   const forceStart = isTruthy(process.env.LOCAL_POSTGRES_FORCE_START)
+  const strictMode = isTruthy(process.env.LOCAL_POSTGRES_STRICT)
 
   if (!shouldManageLocalPostgres(databaseUrl, forceStart)) {
     console.log('[db] DATABASE_URL points to non-local database, skipping local PostgreSQL startup')
@@ -121,8 +130,8 @@ function main() {
 
   if (!readyAfterText.toLowerCase().includes('accepting connections')) {
     printOutput('[db]', readyAfter)
-    console.error(`[db] Failed to verify PostgreSQL on 127.0.0.1:${pgPort}`)
-    process.exit(1)
+    failOrWarn(`[db] Failed to verify PostgreSQL on 127.0.0.1:${pgPort}`, strictMode)
+    return
   }
 
   console.log(`[db] Local PostgreSQL is ready on 127.0.0.1:${pgPort}`)
