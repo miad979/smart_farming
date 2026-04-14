@@ -124,6 +124,8 @@ const EDGE_TTS_BN_VOICE = (process.env.EDGE_TTS_BN_VOICE || 'bn-BD-PradeepNeural
 const EDGE_TTS_EN_VOICE = (process.env.EDGE_TTS_EN_VOICE || 'en-US-AriaNeural').trim()
 const EDGE_TTS_BN_RATE = (process.env.EDGE_TTS_BN_RATE || '-10%').trim()
 const EDGE_TTS_EN_RATE = (process.env.EDGE_TTS_EN_RATE || 'default').trim()
+const DEFAULT_DEVICE_HELP_LINE = '+8801700000000'
+const ENV_DEVICE_HELP_LINE = String(process.env.DEVICE_HELP_LINE || DEFAULT_DEVICE_HELP_LINE).trim()
 const TTS_CACHE = new Map() // In-memory cache for generated speech
 const realtimeClients = new Map()
 const RATE_LIMIT_BUCKETS = new Map()
@@ -162,6 +164,7 @@ function createEmptyDb() {
     assistant_chat_messages: {},
     audit_logs: {},
     login_security: {},
+    app_settings: {},
   }
 }
 
@@ -751,6 +754,7 @@ function createDefaultIrrigationSchedule(userId, cropName = 'Rice') {
       threshold: profile.threshold,
       window: profile.window,
       maxVolume: profile.maxVolume,
+      alarmTickThreshold: 3,
     },
     updatedAt: nowIso(),
   }
@@ -791,6 +795,12 @@ function normalizeForcedPumpAction(value) {
   if (normalized === 'on') return 'on'
   if (normalized === 'off') return 'off'
   return null
+}
+
+function normalizeAlarmTickThreshold(value) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return 3
+  return Math.max(2, Math.min(4, Math.round(parsed)))
 }
 
 function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
@@ -907,6 +917,204 @@ function isSuperUser(user) {
 
 function isMainAdmin(user) {
   return user?.email === 'admin@smartfarming.local'
+}
+
+function normalizeDeviceHelpLine(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+
+  const sanitized = raw.replace(/[^+\d]/g, '')
+  if (!sanitized) return ''
+
+  if (sanitized.startsWith('+')) {
+    return `+${sanitized.slice(1).replace(/\+/g, '')}`
+  }
+
+  return sanitized.replace(/\+/g, '')
+}
+
+function isValidDeviceHelpLine(value) {
+  const digits = String(value || '').replace(/\D/g, '')
+  return digits.length >= 6
+}
+
+function getDeviceHelpLineNumber(db) {
+  const stored = normalizeDeviceHelpLine(db?.app_settings?.device_help_line)
+  if (stored && isValidDeviceHelpLine(stored)) {
+    return stored
+  }
+
+  const envValue = normalizeDeviceHelpLine(ENV_DEVICE_HELP_LINE)
+  if (envValue && isValidDeviceHelpLine(envValue)) {
+    return envValue
+  }
+
+  return DEFAULT_DEVICE_HELP_LINE
+}
+
+function setDeviceHelpLineNumber(db, value) {
+  const normalized = normalizeDeviceHelpLine(value)
+  if (!isValidDeviceHelpLine(normalized)) {
+    throw new Error('Help line number must contain at least 6 digits')
+  }
+
+  db.app_settings ||= {}
+  db.app_settings.device_help_line = normalized
+  db.app_settings.updated_at = nowIso()
+
+  return normalized
+}
+
+function getSensorStatusLabels(status) {
+  switch (status) {
+    case 'healthy':
+      return { en: 'Healthy', bn: 'স্বাভাবিক' }
+    case 'warning':
+      return { en: 'Attention', bn: 'সতর্কতা' }
+    case 'not-working':
+      return { en: 'Not Working', bn: 'কাজ করছে না' }
+    case 'broken':
+      return { en: 'Broken', bn: 'বিকল' }
+    default:
+      return { en: 'No Sensor', bn: 'সেন্সর নেই' }
+  }
+}
+
+function evaluateDeviceSensorHealth(device) {
+  const rawStatus = String(device?.status || 'active').trim().toLowerCase()
+  const offlineStatuses = new Set(['offline', 'inactive', 'disconnected'])
+  const brokenStatuses = new Set(['broken', 'fault', 'error'])
+  const lastSyncMs = new Date(device?.lastSync || 0).getTime()
+  const hasValidSync = Number.isFinite(lastSyncMs) && lastSyncMs > 0
+  const syncAgeMinutes = hasValidSync
+    ? Math.max(0, Math.round((Date.now() - lastSyncMs) / 60000))
+    : null
+  const staleSync = typeof syncAgeMinutes === 'number' && syncAgeMinutes > 45
+  const battery = Number(device?.telemetry?.battery)
+  const lowBattery = Number.isFinite(battery) && battery <= 10
+  const moisture = Number(device?.telemetry?.soilMoisture)
+  const missingMoisture = !Number.isFinite(moisture)
+
+  let health = 'healthy'
+  let reason = 'Sensor reporting normally'
+  let reasonBn = 'সেন্সর স্বাভাবিকভাবে তথ্য দিচ্ছে'
+
+  if (brokenStatuses.has(rawStatus)) {
+    health = 'broken'
+    reason = 'Device reported a broken/fault status'
+    reasonBn = 'ডিভাইস বিকল বা ত্রুটি স্ট্যাটাস দেখাচ্ছে'
+  } else if (offlineStatuses.has(rawStatus)) {
+    health = 'not-working'
+    reason = 'Device is offline or inactive'
+    reasonBn = 'ডিভাইস অফলাইন বা নিষ্ক্রিয়'
+  } else if (!hasValidSync || staleSync) {
+    health = 'not-working'
+    reason = 'No recent sensor sync from device'
+    reasonBn = 'ডিভাইস থেকে সাম্প্রতিক সেন্সর সিঙ্ক পাওয়া যায়নি'
+  } else if (missingMoisture) {
+    health = 'warning'
+    reason = 'Sensor data is incomplete (moisture missing)'
+    reasonBn = 'সেন্সর ডাটা অসম্পূর্ণ (ময়েশ্চার পাওয়া যায়নি)'
+  } else if (lowBattery) {
+    health = 'warning'
+    reason = 'Device battery is critically low'
+    reasonBn = 'ডিভাইসের ব্যাটারি খুব কম'
+  }
+
+  return {
+    health,
+    reason,
+    reasonBn,
+    syncAgeMinutes,
+  }
+}
+
+function buildUserSensorStatusSummary(user, devices = []) {
+  const deviceList = Array.isArray(devices) ? devices.filter(Boolean) : []
+  const labelsNoSensor = getSensorStatusLabels('no-device')
+
+  if (!deviceList.length) {
+    return {
+      userId: user?.id || null,
+      userName: user?.name || 'Unknown',
+      userEmail: user?.email || null,
+      userRole: user?.role || 'farmer',
+      userRoleBn: user?.role_bn || roleBn(user?.role || 'farmer'),
+      sensorStatus: 'no-device',
+      sensorStatusLabel: labelsNoSensor.en,
+      sensorStatusLabelBn: labelsNoSensor.bn,
+      issueReason: 'No registered irrigation sensor device',
+      issueReasonBn: 'কোনো নিবন্ধিত সেচ সেন্সর ডিভাইস নেই',
+      deviceCount: 0,
+      activeDeviceCount: 0,
+      warningDeviceCount: 0,
+      notWorkingDeviceCount: 0,
+      brokenDeviceCount: 0,
+      lastSync: null,
+      primaryDevice: null,
+      primaryTelemetry: {},
+    }
+  }
+
+  const evaluated = deviceList.map((device) => ({
+    device,
+    health: evaluateDeviceSensorHealth(device),
+  }))
+
+  const broken = evaluated.filter((item) => item.health.health === 'broken')
+  const notWorking = evaluated.filter((item) => item.health.health === 'not-working')
+  const warning = evaluated.filter((item) => item.health.health === 'warning')
+  const healthy = evaluated.filter((item) => item.health.health === 'healthy')
+
+  let sensorStatus = 'healthy'
+  let statusSource = evaluated[0]
+
+  if (broken.length > 0) {
+    sensorStatus = 'broken'
+    statusSource = broken[0]
+  } else if (notWorking.length > 0) {
+    sensorStatus = 'not-working'
+    statusSource = notWorking[0]
+  } else if (warning.length > 0) {
+    sensorStatus = 'warning'
+    statusSource = warning[0]
+  }
+
+  const labels = getSensorStatusLabels(sensorStatus)
+  const primaryDevice = deviceList.find((item) => item?.type === 'virtual_soil_sensor') || deviceList[0]
+
+  return {
+    userId: user?.id || null,
+    userName: user?.name || 'Unknown',
+    userEmail: user?.email || null,
+    userRole: user?.role || 'farmer',
+    userRoleBn: user?.role_bn || roleBn(user?.role || 'farmer'),
+    sensorStatus,
+    sensorStatusLabel: labels.en,
+    sensorStatusLabelBn: labels.bn,
+    issueReason: statusSource?.health?.reason || 'Sensor reporting normally',
+    issueReasonBn: statusSource?.health?.reasonBn || 'সেন্সর স্বাভাবিকভাবে তথ্য দিচ্ছে',
+    deviceCount: deviceList.length,
+    activeDeviceCount: healthy.length,
+    warningDeviceCount: warning.length,
+    notWorkingDeviceCount: notWorking.length,
+    brokenDeviceCount: broken.length,
+    lastSync: primaryDevice?.lastSync || null,
+    primaryDevice: {
+      id: primaryDevice?.id || null,
+      name: primaryDevice?.name || null,
+      type: primaryDevice?.type || null,
+      mode: primaryDevice?.mode || null,
+      status: primaryDevice?.status || null,
+      actuatorState: primaryDevice?.actuatorState || null,
+    },
+    primaryTelemetry: {
+      soilMoisture: Number(primaryDevice?.telemetry?.soilMoisture),
+      battery: Number(primaryDevice?.telemetry?.battery),
+      temperature: Number(primaryDevice?.telemetry?.temperature),
+      humidity: Number(primaryDevice?.telemetry?.humidity),
+    },
+  }
 }
 
 function pushUserAlert(db, userId, payload = {}) {
@@ -1174,6 +1382,7 @@ function ensureSystemStorageTables(db) {
   db.uploadsByHash ||= {}
   db.uploaded_documents ||= {}
   db.uploadedDocumentsByHash ||= {}
+  db.app_settings ||= {}
 }
 
 function inferUploadedDocumentType(record) {
@@ -1432,6 +1641,7 @@ function seedIfEmpty(db) {
   db.assistant_chat_messages ||= {}
   db.audit_logs ||= {}
   db.login_security ||= {}
+  db.app_settings ||= {}
 
   // Default admin so the app is usable immediately.
   const adminEmail = 'admin@smartfarming.local'
@@ -3443,6 +3653,80 @@ function createLocalApiMiddleware() {
         return send(res, 200, { logs })
       }
 
+      // ADMIN: per-user sensor status overview
+      if (method === 'GET' && pathname === '/admin/device-status') {
+        const authId = authUserIdFromReq(req)
+        if (!authId) return send(res, 401, { error: 'Unauthorized' })
+        const current = db.users[authId]
+        if (!current || !isAdminRole(current.role)) return send(res, 403, { error: 'Admin access required' })
+
+        const users = Object.values(db.users || {}).map(stripUserMetadata)
+        const statuses = users.map((user) => {
+          const deviceIds = db.devicesByUser?.[user.id] || []
+          const devices = deviceIds.map((deviceId) => db.devices?.[deviceId]).filter(Boolean)
+          return buildUserSensorStatusSummary(user, devices)
+        })
+
+        const summary = statuses.reduce((acc, item) => {
+          acc.totalUsers += 1
+          if (item.sensorStatus === 'healthy') acc.healthyUsers += 1
+          if (item.sensorStatus === 'warning') acc.attentionUsers += 1
+          if (item.sensorStatus === 'not-working') acc.notWorkingUsers += 1
+          if (item.sensorStatus === 'broken') acc.brokenUsers += 1
+          if (item.sensorStatus === 'no-device') acc.noDeviceUsers += 1
+          return acc
+        }, {
+          totalUsers: 0,
+          healthyUsers: 0,
+          attentionUsers: 0,
+          notWorkingUsers: 0,
+          brokenUsers: 0,
+          noDeviceUsers: 0,
+        })
+
+        return send(res, 200, {
+          statuses,
+          summary,
+          helpLineNumber: getDeviceHelpLineNumber(db),
+        })
+      }
+
+      // ADMIN: update device help line number
+      if (method === 'PUT' && pathname === '/admin/help-line') {
+        const authId = authUserIdFromReq(req)
+        if (!authId) return send(res, 401, { error: 'Unauthorized' })
+        const current = db.users[authId]
+        if (!current || !isAdminRole(current.role)) return send(res, 403, { error: 'Admin access required' })
+
+        const body = await readJsonBody(req)
+        const incomingHelpLine = typeof body?.helpLineNumber === 'string' ? body.helpLineNumber : ''
+
+        let nextHelpLine = ''
+        try {
+          nextHelpLine = setDeviceHelpLineNumber(db, incomingHelpLine)
+        } catch (error) {
+          return send(res, 400, { error: error?.message || 'Invalid help line number' })
+        }
+
+        recordAuditLog(db, {
+          actorId: authId,
+          actorEmail: current.email || null,
+          action: 'admin.helpLine.update',
+          targetUserId: null,
+          targetEmail: null,
+          metadata: {
+            helpLineNumber: nextHelpLine,
+          },
+        })
+
+        saveDb(db)
+
+        return send(res, 200, {
+          helpLineNumber: nextHelpLine,
+          message: 'Device help line updated',
+        })
+      }
+
       // EXPERTS: public verified doctors list
       if (method === 'GET' && pathname === '/experts') {
         const experts = Object.values(db.users)
@@ -3923,7 +4207,10 @@ function createLocalApiMiddleware() {
           db.irrigation[userId] = schedule
           saveDb(db)
         }
-        return send(res, 200, { schedule })
+        return send(res, 200, {
+          schedule,
+          helpLineNumber: getDeviceHelpLineNumber(db),
+        })
       }
 
       // IRRIGATION: update
@@ -3946,13 +4233,23 @@ function createLocalApiMiddleware() {
             threshold: Number(schedule?.policy?.threshold || profile.threshold),
             window: schedule?.policy?.window || profile.window,
             maxVolume: Number(schedule?.policy?.maxVolume || profile.maxVolume),
+            alarmTickThreshold: normalizeAlarmTickThreshold(schedule?.policy?.alarmTickThreshold),
           }
+        }
+
+        schedule.policy = {
+          ...(schedule.policy || {}),
+          alarmTickThreshold: normalizeAlarmTickThreshold(schedule?.policy?.alarmTickThreshold),
         }
 
         db.irrigation[userId] = schedule
         saveDb(db)
         emitRealtime(`irrigation:${userId}`, { action: 'update', schedule }, userId)
-        return send(res, 200, { schedule, message: 'Irrigation schedule updated' })
+        return send(res, 200, {
+          schedule,
+          message: 'Irrigation schedule updated',
+          helpLineNumber: getDeviceHelpLineNumber(db),
+        })
       }
 
       // CONSULTATIONS: create
@@ -4254,6 +4551,7 @@ function createLocalApiMiddleware() {
             threshold: Number(existingSchedule?.policy?.threshold || cropProfile.threshold),
             window: existingSchedule?.policy?.window || cropProfile.window,
             maxVolume: Number(existingSchedule?.policy?.maxVolume || cropProfile.maxVolume),
+            alarmTickThreshold: normalizeAlarmTickThreshold(existingSchedule?.policy?.alarmTickThreshold),
           },
           updatedAt: nowIso(),
         }
@@ -4265,6 +4563,7 @@ function createLocalApiMiddleware() {
         return send(res, 200, {
           device,
           schedule,
+          helpLineNumber: getDeviceHelpLineNumber(db),
           message: 'Virtual irrigation device is ready',
         })
       }
@@ -4307,6 +4606,7 @@ function createLocalApiMiddleware() {
             threshold: Number(existingSchedule?.policy?.threshold || cropProfile.threshold),
             window: existingSchedule?.policy?.window || cropProfile.window,
             maxVolume: Number(existingSchedule?.policy?.maxVolume || cropProfile.maxVolume),
+            alarmTickThreshold: normalizeAlarmTickThreshold(existingSchedule?.policy?.alarmTickThreshold),
           },
           deviceId,
         }
@@ -4345,6 +4645,7 @@ function createLocalApiMiddleware() {
         return send(res, 200, {
           device: updatedDevice,
           schedule,
+          helpLineNumber: getDeviceHelpLineNumber(db),
           action,
           appliedLiters,
           simulatedInput: {

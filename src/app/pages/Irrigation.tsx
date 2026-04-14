@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { t } from '../utils/translations';
-import { Droplets, Power, AlertCircle, Settings, Play, Loader2, Cpu, Activity } from 'lucide-react';
+import { Droplets, Power, AlertCircle, Settings, Play, Loader2, Cpu, Activity, PhoneCall } from 'lucide-react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LineChart, Line } from 'recharts';
 import { getCurrentLocation, getLastKnownLocation } from '../utils/helpers';
 import {
@@ -37,6 +37,7 @@ type IrrigationData = {
     threshold: number;
     window: string;
     maxVolume: number;
+    alarmTickThreshold: number;
   };
 };
 
@@ -72,6 +73,7 @@ const DEFAULT_IRRIGATION: IrrigationData = {
     threshold: 65,
     window: '6:00 AM - 8:00 AM',
     maxVolume: 150,
+    alarmTickThreshold: 3,
   },
 };
 
@@ -114,6 +116,10 @@ export const Irrigation: React.FC = () => {
   const FALLBACK_COORDS = { lat: 23.8103, lng: 90.4125 };
   const { state } = useApp();
   const lang = state.language;
+  const fallbackHelpLineNumber = String(import.meta.env.VITE_DEVICE_HELP_LINE || '+8801700000000').trim();
+  const [deviceHelpLineNumber, setDeviceHelpLineNumber] = useState(fallbackHelpLineNumber);
+  const normalizedHelpLine = String(deviceHelpLineNumber || fallbackHelpLineNumber).replace(/[^+\d]/g, '') || '+8801700000000';
+  const deviceHelpLineHref = `tel:${normalizedHelpLine}`;
   const [data, setData] = useState<IrrigationData>(DEFAULT_IRRIGATION);
   const [autoMode, setAutoMode] = useState(DEFAULT_IRRIGATION.autoMode);
   const [showPolicy, setShowPolicy] = useState(false);
@@ -129,6 +135,18 @@ export const Irrigation: React.FC = () => {
   const [virtualDevice, setVirtualDevice] = useState<VirtualDevice | null>(null);
   const [softRefreshTick, setSoftRefreshTick] = useState(0);
 
+  const normalizeAlarmTickThreshold = (value: unknown) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return 3;
+    return Math.max(2, Math.min(4, Math.round(parsed)));
+  };
+
+  const parseLitersFromAmount = (value: string) => {
+    const raw = String(value || '').replace(/[^\d.]/g, '');
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
   const refreshOrSetupVirtualDevice = async (cropName: string) => {
     if (state.userMode === 'guest' || !state.accessToken) return null;
 
@@ -143,6 +161,9 @@ export const Irrigation: React.FC = () => {
     }
 
     const setup = await setupVirtualIrrigationDevice(state.accessToken, { crop: cropName });
+    if (typeof setup?.helpLineNumber === 'string' && setup.helpLineNumber.trim()) {
+      setDeviceHelpLineNumber(setup.helpLineNumber.trim());
+    }
     if (setup?.device) {
       setVirtualDevice(setup.device);
     }
@@ -178,6 +199,9 @@ export const Irrigation: React.FC = () => {
           ? { manualLiters: Math.max(1, Math.round(options.manualLiters)) }
           : {}),
       });
+      if (typeof result?.helpLineNumber === 'string' && result.helpLineNumber.trim()) {
+        setDeviceHelpLineNumber(result.helpLineNumber.trim());
+      }
       if (result?.device) setVirtualDevice(result.device);
       if (result?.schedule) {
         setData(result.schedule);
@@ -239,6 +263,65 @@ export const Irrigation: React.FC = () => {
     [data.sensorHistory, lang],
   );
 
+  const latestSensorTick = useMemo(() => {
+    const history = data.sensorHistory || [];
+    if (!history.length) return null;
+    return history[history.length - 1];
+  }, [data.sensorHistory]);
+
+  const pumpIsActive = useMemo(() => {
+    const actuatorState = String(virtualDevice?.actuatorState || '').toLowerCase();
+    if (actuatorState === 'watering' || actuatorState === 'on') return true;
+    return latestSensorTick?.action === 'watering';
+  }, [virtualDevice?.actuatorState, latestSensorTick?.action]);
+
+  const currentFlowLiters = useMemo(() => {
+    if (!pumpIsActive) return 0;
+    const fromSimulation = Number(lastPumpSimulation?.appliedLiters || 0);
+    const fromSensorTick = Number(latestSensorTick?.appliedLiters || 0);
+    const fromScheduleAmount = parseLitersFromAmount(data.amount);
+    return Math.round(Math.max(18, fromSimulation, fromSensorTick, fromScheduleAmount));
+  }, [pumpIsActive, lastPumpSimulation?.appliedLiters, latestSensorTick?.appliedLiters, data.amount]);
+
+  const flowPulseDuration = useMemo(() => {
+    if (!pumpIsActive) return 2.4;
+    const cap = Number(data.policy?.maxVolume || 150);
+    const normalized = Math.max(18, Math.min(cap, currentFlowLiters));
+    return Math.max(0.65, 2.2 - normalized / 85);
+  }, [pumpIsActive, currentFlowLiters, data.policy?.maxVolume]);
+
+  const moistureThreshold = Number(data.policy?.threshold || 60);
+  const alarmTickThreshold = normalizeAlarmTickThreshold(data.policy?.alarmTickThreshold);
+
+  const pipeFillPercent = useMemo(() => {
+    if (!pumpIsActive) return 0;
+    const maxVolume = Math.max(1, Number(data.policy?.maxVolume || 150));
+    const normalized = Math.round((Math.max(0, currentFlowLiters) / maxVolume) * 100);
+    return Math.max(12, Math.min(100, normalized));
+  }, [pumpIsActive, currentFlowLiters, data.policy?.maxVolume]);
+
+  const lowMoistureStreak = useMemo(() => {
+    const history = (data.sensorHistory || []).slice(-20).reverse();
+    if (!history.length) {
+      return Number(data.moisture || 0) < moistureThreshold ? 1 : 0;
+    }
+
+    let streak = 0;
+    for (const tick of history) {
+      const measured = Number(tick?.measuredMoisture ?? tick?.moisture ?? 0);
+      if (measured < moistureThreshold) {
+        streak += 1;
+        continue;
+      }
+      break;
+    }
+
+    return streak;
+  }, [data.sensorHistory, data.moisture, moistureThreshold]);
+
+  const lowMoistureAlarmActive = lowMoistureStreak >= alarmTickThreshold;
+  const lowMoistureDeficit = Math.max(0, Math.round(moistureThreshold - Number(data.moisture || 0)));
+
   const getActionDotColor = (action?: string) => (action === 'watering' ? '#f97316' : '#16a34a');
 
   const renderActionDot = (props: any) => {
@@ -268,8 +351,11 @@ export const Irrigation: React.FC = () => {
       setLoading(true);
     }
     try {
-      const { schedule } = await getIrrigationSchedule(state.accessToken, state.user.id);
+      const { schedule, helpLineNumber } = await getIrrigationSchedule(state.accessToken, state.user.id);
       setData(schedule);
+      if (typeof helpLineNumber === 'string' && helpLineNumber.trim()) {
+        setDeviceHelpLineNumber(helpLineNumber.trim());
+      }
       setAutoMode(!!schedule.autoMode);
       setSimulatedMoistureInput(Math.max(20, Math.min(95, Number(schedule.moisture || 58))));
       setManualPumpLiters(Math.max(10, Math.min(Number(schedule?.policy?.maxVolume || 150), 45)));
@@ -342,6 +428,28 @@ export const Irrigation: React.FC = () => {
   }, [state.user.id, state.userMode]);
 
   useEffect(() => {
+    if (!state.user.id || state.userMode === 'guest') return;
+
+    const unsubscribe = realtimeConnection.subscribe(`devices:${state.user.id}`, (event) => {
+      const incomingDevice = event?.device;
+      if (!incomingDevice) return;
+      if (incomingDevice?.mode !== 'virtual' || incomingDevice?.type !== 'virtual_soil_sensor') return;
+
+      setVirtualDevice((prev) => ({
+        ...(prev || {}),
+        ...incomingDevice,
+        telemetry: {
+          ...(prev?.telemetry || {}),
+          ...(incomingDevice?.telemetry || {}),
+        },
+      }));
+      setLastUpdated(new Date());
+    });
+
+    return unsubscribe;
+  }, [state.user.id, state.userMode]);
+
+  useEffect(() => {
     if (!autoMode || !autoSimulation || state.userMode === 'guest' || !state.accessToken) return;
     const timer = setInterval(() => {
       void simulateVirtualTick(data.policy?.crop || 'Rice');
@@ -354,8 +462,11 @@ export const Irrigation: React.FC = () => {
 
     setSaving(true);
     try {
-      const { schedule } = await updateIrrigationSchedule(state.accessToken, state.user.id, updates);
+      const { schedule, helpLineNumber } = await updateIrrigationSchedule(state.accessToken, state.user.id, updates);
       setData(schedule);
+      if (typeof helpLineNumber === 'string' && helpLineNumber.trim()) {
+        setDeviceHelpLineNumber(helpLineNumber.trim());
+      }
       if (typeof schedule.autoMode === 'boolean') {
         setAutoMode(schedule.autoMode);
       }
@@ -390,10 +501,20 @@ export const Irrigation: React.FC = () => {
         crop_bn: profile.crop_bn,
         threshold: profile.threshold,
         maxVolume: profile.maxVolume,
+        alarmTickThreshold,
       },
     });
     await refreshOrSetupVirtualDevice(nextCrop);
     await simulateVirtualTick(nextCrop);
+  };
+
+  const handleAlarmTickThresholdChange = async (nextValue: number) => {
+    await persistUpdates({
+      policy: {
+        ...data.policy,
+        alarmTickThreshold: normalizeAlarmTickThreshold(nextValue),
+      },
+    });
   };
 
   const runAutoDecisionSimulation = async () => {
@@ -589,6 +710,115 @@ export const Irrigation: React.FC = () => {
             </span>
           </div>
 
+          <div
+            className={`pump-visual-stage mb-4 ${lowMoistureAlarmActive ? 'is-alarm' : ''}`}
+            data-testid="pump-visual-stage"
+            aria-live="polite"
+          >
+            <div className="flex items-center justify-between gap-2 text-[11px] text-slate-700 mb-3">
+              <span className="font-semibold text-slate-900">
+                {lang === 'bn' ? 'লাইভ মোটর ও পানি প্রবাহ' : 'Live Motor and Water Flow'}
+              </span>
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-slate-700">
+                  {lang === 'bn' ? 'সেন্সর স্টেট' : 'Sensor State'}: {latestSensorTick?.action || (lang === 'bn' ? 'আইডল' : 'idle')}
+                </span>
+                {lowMoistureAlarmActive && (
+                  <span className="pump-alarm-pill is-active" data-testid="pump-alarm-status">
+                    {lang === 'bn' ? 'লো মোয়েশ্চার অ্যালার্ম' : 'Low Moisture Alarm'}
+                  </span>
+                )}
+                <span
+                  data-testid="alarm-trigger-label"
+                  className={`inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold ${
+                    lowMoistureAlarmActive
+                      ? 'border-rose-300 bg-rose-50 text-rose-700'
+                      : 'border-slate-300 bg-white/70 text-slate-600'
+                  }`}
+                >
+                  {lang === 'bn'
+                    ? `অ্যালার্ম সেট: ${alarmTickThreshold} টিক`
+                    : `Alarm set: ${alarmTickThreshold} ticks`}
+                </span>
+              </div>
+            </div>
+
+            <div className="pump-visual-grid">
+              <div className={`pump-motor-shell ${lowMoistureAlarmActive ? 'is-alarm' : ''}`}>
+                <div
+                  className={`pump-motor-rotor ${pumpIsActive ? 'is-active' : ''}`}
+                  style={{ animationDuration: `${Math.max(0.5, flowPulseDuration * 0.8)}s` }}
+                >
+                  {Array.from({ length: 6 }).map((_, idx) => (
+                    <span
+                      key={`motor-spoke-${idx}`}
+                      className="pump-motor-spoke"
+                      style={{ transform: `translate(-50%, -100%) rotate(${idx * 60}deg)` }}
+                    />
+                  ))}
+                  <span className="pump-motor-hub" />
+                </div>
+              </div>
+
+              <div>
+                <div className="pump-pipe-track">
+                  <div
+                    className={`pump-pipe-fill ${pumpIsActive ? 'is-active' : ''} ${lowMoistureAlarmActive ? 'is-alarm' : ''}`}
+                    style={{ width: `${pipeFillPercent}%` }}
+                  />
+                  <div
+                    className={`pump-water-stream ${pumpIsActive ? 'is-active' : ''}`}
+                    style={{ animationDuration: `${flowPulseDuration.toFixed(2)}s` }}
+                  />
+                  <div
+                    className={`pump-water-stream secondary ${pumpIsActive ? 'is-active' : ''}`}
+                    style={{ animationDuration: `${(flowPulseDuration * 1.35).toFixed(2)}s` }}
+                  />
+                  <span className="pump-pipe-overlay" data-testid="pump-pipe-fill-overlay">
+                    {lang === 'bn' ? `পাইপ ফিল ${pipeFillPercent}%` : `Pipe Fill ${pipeFillPercent}%`}
+                  </span>
+                </div>
+
+                <div className={`pump-droplet-cloud ${pumpIsActive ? 'is-active' : ''}`}>
+                  {Array.from({ length: 7 }).map((_, idx) => (
+                    <span
+                      key={`pump-droplet-${idx}`}
+                      className="pump-droplet"
+                      style={{ animationDelay: `${(idx * 0.16).toFixed(2)}s` }}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-3">
+              <div className="pump-soil-track" role="presentation">
+                <div
+                  className={`pump-soil-fill ${Number(data.moisture || 0) < Number(data.policy?.threshold || 60) ? 'is-low' : 'is-good'}`}
+                  style={{ width: `${Math.max(8, Math.min(100, Number(data.moisture || 0)))}%` }}
+                />
+              </div>
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-700">
+                <span>
+                  {lang === 'bn' ? 'মোটর স্ট্যাটাস' : 'Motor Status'}: {pumpIsActive ? (lang === 'bn' ? 'চালু' : 'Running') : (lang === 'bn' ? 'বন্ধ' : 'Idle')}
+                </span>
+                <span>
+                  {lang === 'bn' ? 'রিয়েল-টাইম ফ্লো' : 'Real-time Flow'}: {pumpIsActive ? `${currentFlowLiters}L/cycle` : `0L/cycle`}
+                </span>
+                <span>
+                  {lang === 'bn' ? 'ময়েশ্চার' : 'Moisture'}: {Math.round(Number(data.moisture || 0))}%
+                </span>
+                {lowMoistureAlarmActive && (
+                  <span className="pump-alarm-copy" data-testid="pump-alarm-copy">
+                    {lang === 'bn'
+                      ? `${lowMoistureStreak}/${alarmTickThreshold} টিক ধরে থ্রেশহোল্ডের নিচে (${lowMoistureDeficit}% ঘাটতি)`
+                      : `${lowMoistureStreak}/${alarmTickThreshold} ticks below threshold (${lowMoistureDeficit}% deficit)`}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <label className="text-xs text-gray-700">
               {lang === 'bn' ? 'সিমুলেটেড আর্দ্রতা (%)' : 'Simulated Moisture (%)'}
@@ -657,6 +887,24 @@ export const Irrigation: React.FC = () => {
               {lastPumpSimulation.appliedLiters > 0 ? ` (${lastPumpSimulation.appliedLiters}L)` : ''}
             </p>
           )}
+
+          <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50/70 p-3">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <p className="text-xs text-blue-900">
+                {lang === 'bn'
+                  ? 'সেন্সর সমস্যা, ডিভাইস বিকল, বা সংযোগ না হলে হেল্প লাইনে কল করুন'
+                  : 'If sensor is broken, offline, or not working, call the device help line'}
+              </p>
+              <a
+                data-testid="device-helpline-call-btn"
+                href={deviceHelpLineHref}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
+              >
+                <PhoneCall className="w-3.5 h-3.5" />
+                {lang === 'bn' ? 'ডিভাইস হেল্প লাইনে কল' : 'Call Device Help Line'}
+              </a>
+            </div>
+          </div>
         </div>
 
         <div className="mt-5 rounded-xl border border-indigo-100 bg-indigo-50/30 p-4">
@@ -802,6 +1050,27 @@ export const Irrigation: React.FC = () => {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                 readOnly
               />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">
+                {lang === 'bn' ? 'অ্যালার্ম ট্রিগার (লো টিক)' : 'Alarm Trigger (Low Ticks)'}
+              </label>
+              <select
+                data-testid="alarm-tick-threshold-select"
+                value={alarmTickThreshold}
+                onChange={(e) => void handleAlarmTickThresholdChange(Number(e.target.value))}
+                disabled={saving}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white disabled:opacity-70"
+              >
+                <option value={2}>{lang === 'bn' ? '২ টিক' : '2 ticks'}</option>
+                <option value={3}>{lang === 'bn' ? '৩ টিক' : '3 ticks'}</option>
+                <option value={4}>{lang === 'bn' ? '৪ টিক' : '4 ticks'}</option>
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                {lang === 'bn'
+                  ? 'ক্রমাগত কতটি লো ময়েশ্চার টিক হলে অ্যালার্ম পালস চালু হবে'
+                  : 'How many consecutive low-moisture ticks trigger alarm pulse mode'}
+              </p>
             </div>
           </div>
         )}

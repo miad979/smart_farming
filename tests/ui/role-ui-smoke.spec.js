@@ -229,6 +229,12 @@ test.describe.serial('Role-based UI smoke checks', () => {
     await page.goto(`${APP_BASE_URL}/irrigation`, { waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('heading', { name: 'Irrigation', exact: true })).toBeVisible();
     await expect(page.getByText('Last updated')).toBeVisible();
+    await expect(page.getByTestId('pump-visual-stage')).toBeVisible();
+    await expect(page.getByTestId('pump-pipe-fill-overlay')).toBeVisible();
+    await expect(page.getByTestId('alarm-trigger-label')).toBeVisible();
+    await expect(page.getByTestId('device-helpline-call-btn')).toBeVisible();
+    await page.getByRole('button', { name: 'Irrigation Policy' }).click();
+    await expect(page.getByTestId('alarm-tick-threshold-select')).toBeVisible();
 
     await context.close();
   });
@@ -301,7 +307,14 @@ test.describe.serial('Role-based UI smoke checks', () => {
     await page.goto(`${APP_BASE_URL}/admin`, { waitUntil: 'domcontentloaded' });
     await expect(page).toHaveURL(/\/admin(?:\?.*)?$/);
     await expect(page.getByRole('heading', { name: 'Admin Panel', exact: true })).toBeVisible();
+    await expect(page.getByTestId('admin-sensor-status-header')).toBeVisible();
+    await expect(page.getByTestId('admin-sensor-failures-filter-btn')).toBeVisible();
     await expect(page.getByRole('link', { name: 'Open doctor verification' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('tab', { name: 'System' }).click();
+    await expect(page.getByTestId('admin-device-helpline-input')).toBeVisible();
+    await expect(page.getByTestId('admin-device-helpline-save-btn')).toBeVisible();
 
     await page.goto(`${APP_BASE_URL}/admin/doctor-verification`, { waitUntil: 'domcontentloaded' });
     await expect(page).toHaveURL(/\/admin\/doctor-verification(?:\?.*)?$/);

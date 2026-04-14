@@ -40,6 +40,13 @@ export const AdminDashboard: React.FC = () => {
   const [systemHealth, setSystemHealth] = useState<any | null>(null);
   const [isHealthLoading, setIsHealthLoading] = useState(false);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [sensorStatuses, setSensorStatuses] = useState<any[]>([]);
+  const [isSensorStatusLoading, setIsSensorStatusLoading] = useState(false);
+  const [sensorStatusError, setSensorStatusError] = useState<string | null>(null);
+  const [showOnlySensorFailures, setShowOnlySensorFailures] = useState(false);
+  const [deviceHelpLineDraft, setDeviceHelpLineDraft] = useState('');
+  const [isHelpLineSaving, setIsHelpLineSaving] = useState(false);
+  const [helpLineFeedback, setHelpLineFeedback] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState({
     name: '',
     location: '',
@@ -91,6 +98,29 @@ export const AdminDashboard: React.FC = () => {
     return date.toLocaleString();
   };
 
+  const refreshSensorStatuses = async () => {
+    if (!state.accessToken) {
+      setSensorStatuses([]);
+      setSensorStatusError(lang === 'bn' ? 'সেশন নেই, আবার লগইন করুন' : 'No active session, please sign in again');
+      return;
+    }
+    try {
+      setIsSensorStatusLoading(true);
+      setSensorStatusError(null);
+      const payload = await api.getAdminDeviceStatuses(state.accessToken);
+      setSensorStatuses(payload?.statuses || []);
+      const nextHelpLine = String(payload?.helpLineNumber || '').trim();
+      if (nextHelpLine) {
+        setDeviceHelpLineDraft(nextHelpLine);
+      }
+    } catch (error: any) {
+      setSensorStatuses([]);
+      setSensorStatusError(error?.message || (lang === 'bn' ? 'সেন্সর স্ট্যাটাস লোড ব্যর্থ হয়েছে' : 'Failed to load sensor status'));
+    } finally {
+      setIsSensorStatusLoading(false);
+    }
+  };
+
   const refreshUsers = async () => {
     if (!state.accessToken) {
       setIsLoadingUsers(false);
@@ -107,6 +137,7 @@ export const AdminDashboard: React.FC = () => {
         return tb - ta;
       });
       setUsers(sorted);
+      void refreshSensorStatuses();
     } catch (error: any) {
       setUsers([]);
       const status = Number(error?.status || 0);
@@ -125,6 +156,11 @@ export const AdminDashboard: React.FC = () => {
   useEffect(() => {
     void refreshUsers();
   }, [state.accessToken, lang]);
+
+  useEffect(() => {
+    if (!state.accessToken) return;
+    void refreshSensorStatuses();
+  }, [state.accessToken]);
 
   const manageableUsers = useMemo(() => {
     return users.filter((user) => {
@@ -220,9 +256,39 @@ export const AdminDashboard: React.FC = () => {
 
   const openSettingsModal = () => {
     setSettingsTab('access');
+    setHelpLineFeedback(null);
     setIsSettingsOpen(true);
     void refreshSystemHealth();
     void refreshAuditLogs();
+  };
+
+  const saveDeviceHelpLine = async () => {
+    if (!state.accessToken) {
+      setHelpLineFeedback(lang === 'bn' ? 'সেশন নেই, আবার লগইন করুন' : 'No active session, please sign in again');
+      return;
+    }
+
+    const nextHelpLine = deviceHelpLineDraft.trim();
+    if (!nextHelpLine) {
+      setHelpLineFeedback(lang === 'bn' ? 'হেল্পলাইন নম্বর লিখুন' : 'Enter a help line number');
+      return;
+    }
+
+    setIsHelpLineSaving(true);
+    setHelpLineFeedback(null);
+    try {
+      const payload = await api.updateAdminHelpLineNumber(state.accessToken, nextHelpLine);
+      const normalized = String(payload?.helpLineNumber || '').trim();
+      if (normalized) {
+        setDeviceHelpLineDraft(normalized);
+      }
+      setHelpLineFeedback(lang === 'bn' ? 'হেল্পলাইন নম্বর আপডেট হয়েছে' : 'Help line number updated');
+      void refreshSensorStatuses();
+    } catch (error: any) {
+      setHelpLineFeedback(error?.message || (lang === 'bn' ? 'হেল্পলাইন আপডেট ব্যর্থ হয়েছে' : 'Failed to update help line number'));
+    } finally {
+      setIsHelpLineSaving(false);
+    }
   };
 
   const grantAccess = async () => {
@@ -322,19 +388,51 @@ export const AdminDashboard: React.FC = () => {
     }
   }
 
+  const sensorStatusByUserId = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const item of sensorStatuses || []) {
+      if (item?.userId) {
+        map.set(item.userId, item);
+      }
+    }
+    return map;
+  }, [sensorStatuses]);
+
   // Filter users
   const filteredUsers = users.filter(user => {
     const hay = `${user.name || ''} ${user.email || ''}`.toLowerCase();
     const matchesSearch = hay.includes(searchTerm.toLowerCase());
     const matchesRole = selectedRole === 'all' || user.role === selectedRole;
-    return matchesSearch && matchesRole;
+    const sensorItem = sensorStatusByUserId.get(user.id);
+    const hasSensorFailure = sensorItem?.sensorStatus === 'broken' || sensorItem?.sensorStatus === 'not-working';
+    const matchesSensorFilter = !showOnlySensorFailures || hasSensorFailure;
+    return matchesSearch && matchesRole && matchesSensorFilter;
   });
 
+  const getSensorBadgeClasses = (status?: string) => {
+    if (status === 'healthy') return 'bg-emerald-100 text-emerald-700 border-emerald-300';
+    if (status === 'warning') return 'bg-amber-100 text-amber-700 border-amber-300';
+    if (status === 'not-working') return 'bg-orange-100 text-orange-700 border-orange-300';
+    if (status === 'broken') return 'bg-rose-100 text-rose-700 border-rose-300';
+    return 'bg-slate-100 text-slate-700 border-slate-300';
+  };
+
+  const getSensorStatusLabel = (item: any) => {
+    if (!item) {
+      return isSensorStatusLoading
+        ? (lang === 'bn' ? 'লোড হচ্ছে...' : 'Loading...')
+        : (lang === 'bn' ? 'ডাটা নেই' : 'No data');
+    }
+    return lang === 'bn'
+      ? (item.sensorStatusLabelBn || item.sensorStatusLabel || '—')
+      : (item.sensorStatusLabel || '—');
+  };
+
   useEffect(() => {
-    if (!isLoadingUsers && users.length > 0 && selectedRole !== 'all' && filteredUsers.length === 0 && !searchTerm.trim()) {
+    if (!isLoadingUsers && users.length > 0 && selectedRole !== 'all' && filteredUsers.length === 0 && !searchTerm.trim() && !showOnlySensorFailures) {
       setSelectedRole('all');
     }
-  }, [isLoadingUsers, users.length, selectedRole, filteredUsers.length, searchTerm]);
+  }, [isLoadingUsers, users.length, selectedRole, filteredUsers.length, searchTerm, showOnlySensorFailures]);
 
   const stats = useMemo(() => {
     const totalUsers = users.length;
@@ -594,6 +692,47 @@ export const AdminDashboard: React.FC = () => {
             </TabsContent>
 
             <TabsContent value="system" className="space-y-4 mt-4">
+              <Card className="border-dashed">
+                <CardHeader>
+                  <CardTitle className="text-sm">{lang === 'bn' ? 'ডিভাইস হেল্পলাইন নম্বর' : 'Device help line number'}</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium" htmlFor="admin-device-help-line-input">
+                      {lang === 'bn' ? 'ফার্মারদের কল নম্বর' : 'Farmer call number'}
+                    </label>
+                    <Input
+                      id="admin-device-help-line-input"
+                      data-testid="admin-device-helpline-input"
+                      value={deviceHelpLineDraft}
+                      onChange={(event) => setDeviceHelpLineDraft(event.target.value)}
+                      placeholder="+8801700000000"
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      data-testid="admin-device-helpline-save-btn"
+                      onClick={() => void saveDeviceHelpLine()}
+                      disabled={isHelpLineSaving || isActionLoading}
+                    >
+                      {isHelpLineSaving
+                        ? (lang === 'bn' ? 'সেভ হচ্ছে...' : 'Saving...')
+                        : (lang === 'bn' ? 'হেল্পলাইন সেভ' : 'Save help line')}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => void refreshSensorStatuses()}
+                      disabled={isSensorStatusLoading}
+                    >
+                      {lang === 'bn' ? 'বর্তমান নম্বর লোড' : 'Load current number'}
+                    </Button>
+                  </div>
+                  {helpLineFeedback && (
+                    <p className="text-xs text-muted-foreground">{helpLineFeedback}</p>
+                  )}
+                </CardContent>
+              </Card>
+
               <Card className="border-dashed">
                 <CardHeader className="flex flex-row items-center justify-between">
                   <CardTitle className="text-sm">{lang === 'bn' ? 'সিস্টেম হেলথ' : 'System health'}</CardTitle>
@@ -1090,6 +1229,12 @@ export const AdminDashboard: React.FC = () => {
             </div>
           )}
 
+          {sensorStatusError && (
+            <div className="mb-4 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-700">
+              {sensorStatusError}
+            </div>
+          )}
+
           {/* Search and Filters */}
           <div className="flex flex-col md:flex-row gap-3 mb-4">
             <div className="relative flex-1">
@@ -1137,6 +1282,25 @@ export const AdminDashboard: React.FC = () => {
               >
                 {lang === 'bn' ? 'সুপার ইউজার' : 'Super'}
               </Button>
+              <Button
+                variant={showOnlySensorFailures ? 'default' : 'outline'}
+                size="sm"
+                data-testid="admin-sensor-failures-filter-btn"
+                onClick={() => setShowOnlySensorFailures((prev) => !prev)}
+              >
+                {lang === 'bn' ? 'শুধু বিকল/অফলাইন' : 'Broken/Not Working Only'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void refreshSensorStatuses()}
+                disabled={isSensorStatusLoading}
+              >
+                <RefreshCw className="w-4 h-4 mr-1" />
+                {isSensorStatusLoading
+                  ? (lang === 'bn' ? 'সেন্সর রিফ্রেশ...' : 'Refreshing...')
+                  : (lang === 'bn' ? 'সেন্সর রিফ্রেশ' : 'Refresh Sensors')}
+              </Button>
             </div>
           </div>
 
@@ -1157,6 +1321,9 @@ export const AdminDashboard: React.FC = () => {
                   <th className="text-left py-3 px-2 text-sm font-semibold hidden md:table-cell">
                     {t('location', lang)}
                   </th>
+                  <th className="text-left py-3 px-2 text-sm font-semibold hidden lg:table-cell" data-testid="admin-sensor-status-header">
+                    {lang === 'bn' ? 'সেন্সর' : 'Sensor'}
+                  </th>
                   <th className="text-left py-3 px-2 text-sm font-semibold hidden lg:table-cell">
                     {t('status', lang)}
                   </th>
@@ -1168,6 +1335,10 @@ export const AdminDashboard: React.FC = () => {
               <tbody>
                 {filteredUsers.map((user) => (
                   <tr key={user.id} className="border-b hover:bg-muted/40">
+                    {(() => {
+                      const sensorItem = sensorStatusByUserId.get(user.id);
+                      return (
+                        <>
                     <td className="py-3 px-2">
                       <div>
                         <p className="font-medium text-sm">{user.name}</p>
@@ -1188,6 +1359,21 @@ export const AdminDashboard: React.FC = () => {
                       {lang === 'bn' ? user.location_bn : user.location}
                     </td>
                     <td className="py-3 px-2 hidden lg:table-cell">
+                      <div className="space-y-1">
+                        <span
+                          data-testid="admin-sensor-status-cell"
+                          className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${getSensorBadgeClasses(sensorItem?.sensorStatus)}`}
+                        >
+                          {getSensorStatusLabel(sensorItem)}
+                        </span>
+                        <p className="text-[11px] text-muted-foreground max-w-[220px] truncate">
+                          {sensorItem
+                            ? (lang === 'bn' ? sensorItem.issueReasonBn : sensorItem.issueReason)
+                            : (isSensorStatusLoading ? (lang === 'bn' ? 'ডেটা লোড হচ্ছে' : 'Loading sensor data') : (lang === 'bn' ? 'সেন্সর তথ্য পাওয়া যায়নি' : 'No sensor info'))}
+                        </p>
+                      </div>
+                    </td>
+                    <td className="py-3 px-2 hidden lg:table-cell">
                       <Badge variant="default">
                         {t('activeStatus', lang)}
                       </Badge>
@@ -1205,6 +1391,9 @@ export const AdminDashboard: React.FC = () => {
                         </Button>
                       </div>
                     </td>
+                        </>
+                      );
+                    })()}
                   </tr>
                 ))}
               </tbody>

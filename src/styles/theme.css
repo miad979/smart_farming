@@ -185,3 +185,319 @@
     line-height: 1.5;
   }
 }
+
+/* Irrigation live pump visual simulator */
+.pump-visual-stage {
+  border-radius: 0.9rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background:
+    radial-gradient(circle at 12% 8%, rgba(14, 165, 233, 0.16), transparent 36%),
+    radial-gradient(circle at 100% 100%, rgba(16, 185, 129, 0.14), transparent 34%),
+    linear-gradient(145deg, rgba(248, 250, 252, 0.96), rgba(239, 246, 255, 0.96));
+  padding: 0.95rem;
+}
+
+.pump-visual-stage.is-alarm {
+  border-color: rgba(244, 63, 94, 0.48);
+  box-shadow: 0 0 0 1px rgba(244, 63, 94, 0.18), 0 10px 24px -16px rgba(225, 29, 72, 0.58);
+  animation: pump-alarm-pulse 1.35s ease-in-out infinite;
+}
+
+.pump-alarm-pill {
+  border-radius: 999px;
+  border: 1px solid rgba(225, 29, 72, 0.34);
+  background: rgba(255, 228, 230, 0.92);
+  color: #be123c;
+  font-weight: 700;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  padding: 4px 8px;
+}
+
+.pump-alarm-pill.is-active {
+  animation: pump-alarm-pulse 1.35s ease-in-out infinite;
+}
+
+.pump-visual-grid {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: 0.85rem;
+  align-items: center;
+}
+
+.pump-motor-shell {
+  height: 86px;
+  width: 86px;
+  border-radius: 9999px;
+  border: 3px solid rgba(37, 99, 235, 0.28);
+  background: radial-gradient(circle, rgba(148, 197, 255, 0.18), rgba(15, 23, 42, 0.06));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.85), 0 7px 16px -9px rgba(30, 41, 59, 0.45);
+}
+
+.pump-motor-shell.is-alarm {
+  border-color: rgba(244, 63, 94, 0.5);
+  box-shadow: 0 0 0 4px rgba(251, 113, 133, 0.2), inset 0 0 0 1px rgba(255, 255, 255, 0.8);
+}
+
+.pump-motor-rotor {
+  height: 64px;
+  width: 64px;
+  border-radius: 9999px;
+  border: 2px solid rgba(30, 64, 175, 0.4);
+  position: relative;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.9), rgba(191, 219, 254, 0.34));
+  transition: box-shadow 220ms ease, transform 220ms ease;
+}
+
+.pump-motor-rotor.is-active {
+  animation-name: pump-motor-spin;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  box-shadow: 0 0 0 6px rgba(59, 130, 246, 0.12), 0 0 20px -5px rgba(37, 99, 235, 0.8);
+}
+
+.pump-motor-spoke {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 24px;
+  border-radius: 999px;
+  transform-origin: 50% 100%;
+  background: linear-gradient(to top, rgba(29, 78, 216, 0.9), rgba(96, 165, 250, 0.24));
+}
+
+.pump-motor-hub {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #1d4ed8, #60a5fa);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
+}
+
+.pump-pipe-track {
+  position: relative;
+  height: 18px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid rgba(37, 99, 235, 0.24);
+  background: linear-gradient(to right, rgba(148, 163, 184, 0.16), rgba(226, 232, 240, 0.64));
+}
+
+.pump-pipe-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(14, 165, 233, 0.32), rgba(6, 182, 212, 0.7));
+  transition: width 420ms ease;
+  z-index: 1;
+}
+
+.pump-pipe-fill.is-active {
+  animation: pump-pipe-fill-pulse 1.7s ease-in-out infinite;
+}
+
+.pump-pipe-fill.is-alarm {
+  background: linear-gradient(90deg, rgba(251, 113, 133, 0.52), rgba(244, 63, 94, 0.88));
+}
+
+.pump-pipe-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: rgba(15, 23, 42, 0.92);
+  letter-spacing: 0.01em;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.pump-water-stream {
+  position: absolute;
+  top: 0;
+  left: -110%;
+  width: 125%;
+  height: 100%;
+  border-radius: inherit;
+  opacity: 0.2;
+  background:
+    repeating-linear-gradient(
+      110deg,
+      rgba(14, 165, 233, 0.25) 0 14px,
+      rgba(56, 189, 248, 0.7) 14px 28px,
+      rgba(125, 211, 252, 0.32) 28px 42px
+    );
+  transition: opacity 200ms ease;
+  z-index: 2;
+}
+
+.pump-water-stream.secondary {
+  filter: blur(0.4px);
+  opacity: 0.14;
+  z-index: 3;
+}
+
+.pump-water-stream.is-active {
+  opacity: 0.95;
+  animation-name: pump-water-flow;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.pump-droplet-cloud {
+  margin-top: 0.38rem;
+  min-height: 20px;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.28rem;
+}
+
+.pump-droplet {
+  width: 6px;
+  height: 10px;
+  border-radius: 999px 999px 999px 999px;
+  background: linear-gradient(180deg, rgba(186, 230, 253, 0.9), rgba(14, 165, 233, 0.95));
+  opacity: 0;
+  transform: translateY(0) scale(0.85);
+}
+
+.pump-droplet-cloud.is-active .pump-droplet {
+  animation: pump-droplet-rise 1.25s ease-in infinite;
+}
+
+.pump-soil-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(148, 163, 184, 0.32);
+}
+
+.pump-soil-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 320ms ease, background-color 320ms ease;
+}
+
+.pump-soil-fill.is-low {
+  background: linear-gradient(90deg, #f97316, #fb923c);
+}
+
+.pump-soil-fill.is-good {
+  background: linear-gradient(90deg, #10b981, #34d399);
+}
+
+.pump-alarm-copy {
+  color: #be123c;
+  font-weight: 700;
+}
+
+@media (max-width: 767px) {
+  .pump-visual-grid {
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 0.7rem;
+  }
+
+  .pump-motor-shell {
+    height: 68px;
+    width: 68px;
+  }
+
+  .pump-motor-rotor {
+    height: 50px;
+    width: 50px;
+  }
+
+  .pump-motor-spoke {
+    height: 18px;
+  }
+}
+
+@keyframes pump-motor-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pump-water-flow {
+  from {
+    transform: translateX(0%);
+  }
+
+  to {
+    transform: translateX(170%);
+  }
+}
+
+@keyframes pump-droplet-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(2px) scale(0.72);
+  }
+
+  22% {
+    opacity: 1;
+  }
+
+  80% {
+    opacity: 0.95;
+    transform: translateY(-12px) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(-18px) scale(1.04);
+  }
+}
+
+@keyframes pump-pipe-fill-pulse {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+
+  50% {
+    filter: brightness(1.25);
+  }
+}
+
+@keyframes pump-alarm-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.26), 0 10px 24px -16px rgba(225, 29, 72, 0.58);
+  }
+
+  50% {
+    box-shadow: 0 0 0 8px rgba(244, 63, 94, 0), 0 12px 28px -14px rgba(225, 29, 72, 0.72);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pump-visual-stage.is-alarm,
+  .pump-alarm-pill.is-active,
+  .pump-motor-rotor.is-active,
+  .pump-pipe-fill.is-active,
+  .pump-water-stream.is-active,
+  .pump-droplet-cloud.is-active .pump-droplet {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

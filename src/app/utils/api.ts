@@ -246,6 +246,45 @@ export async function getAuditLogs(token: string) {
   return readJsonSafely(response) as Promise<{ logs: any[] }>;
 }
 
+export async function getAdminDeviceStatuses(token: string) {
+  const response = await apiFetch(`${API_BASE_URL}/admin/device-status`, {
+    headers: getAuthHeader(token),
+  });
+
+  if (!response.ok) {
+    const error = await readJsonSafely(response);
+    throw new Error(error.error || 'Failed to fetch admin sensor status');
+  }
+
+  return readJsonSafely(response) as Promise<{
+    statuses: any[];
+    summary: {
+      totalUsers: number;
+      healthyUsers: number;
+      attentionUsers: number;
+      notWorkingUsers: number;
+      brokenUsers: number;
+      noDeviceUsers: number;
+    };
+    helpLineNumber?: string;
+  }>;
+}
+
+export async function updateAdminHelpLineNumber(token: string, helpLineNumber: string) {
+  const response = await withCsrfRetry(() => apiFetch(`${API_BASE_URL}/admin/help-line`, {
+    method: 'PUT',
+    headers: getAuthHeader(token),
+    body: JSON.stringify({ helpLineNumber }),
+  }));
+
+  if (!response.ok) {
+    const error = await readJsonSafely(response);
+    throw new Error(error.error || 'Failed to update help line number');
+  }
+
+  return readJsonSafely(response) as Promise<{ helpLineNumber: string; message?: string }>;
+}
+
 export async function uploadDoctorDocument(
   file: File,
   onProgress?: (percent: number) => void,
