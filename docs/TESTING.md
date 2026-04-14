@@ -97,6 +97,7 @@ npm run test:load
 $env:NODE_ENV='production'
 $env:AUTH_TOKEN_SECRET='replace_with_64_plus_chars'
 $env:CORS_ALLOWED_ORIGINS='https://your-runtime-host'
+$env:MARKET_VOLATILITY_PROFILE='balanced'
 node server/check-production-env.cjs
 ```
 
@@ -479,6 +480,7 @@ Policy settings:
 - [ ] auth cookie behavior correct under HTTPS
 - [ ] CORS_ALLOWED_ORIGINS matches production host(s)
 - [ ] AUTH_TOKEN_SECRET is set and sufficiently long
+- [ ] MARKET_VOLATILITY_PROFILE is intentionally set (stable, balanced, or aggressive)
 
 ### Runtime
 - [ ] /api/health returns status ok

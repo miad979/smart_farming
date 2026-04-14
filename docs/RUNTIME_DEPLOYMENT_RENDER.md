@@ -58,6 +58,13 @@ Recommended hardening values:
 - `FORCE_SECURE_COOKIES=true`
 - `AUTH_COOKIE_SAME_SITE=Lax`
 - `CSRF_COOKIE_SAME_SITE=Lax`
+- `MARKET_VOLATILITY_PROFILE=balanced`
+
+Allowed market profile values:
+
+- `stable` (lowest volatility, slower movement)
+- `balanced` (recommended default)
+- `aggressive` (faster and wider movement)
 
 Recommended:
 

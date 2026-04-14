@@ -51,7 +51,7 @@ cp .env.production.example .env.production
 ```
 
 3. Deploy as a Render Blueprint using `render.yaml`.
-4. Set required secrets in Render (`AUTH_TOKEN_SECRET`, `CORS_ALLOWED_ORIGINS`, and any AI provider keys you use).
+4. Set required secrets in Render (`AUTH_TOKEN_SECRET`, `CORS_ALLOWED_ORIGINS`, `MARKET_VOLATILITY_PROFILE=balanced`, and any AI provider keys you use).
 5. Optional: set GitHub Actions repository variable `RENDER_DEPLOY_HOOK_URL` to auto-deploy from `main` via `.github/workflows/deploy-render.yml`.
 
 Detailed steps are in `docs/RUNTIME_DEPLOYMENT_RENDER.md`.

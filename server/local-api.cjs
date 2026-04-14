@@ -57,6 +57,12 @@ function normalizeSameSite(value) {
   return 'Lax'
 }
 
+function normalizeMarketVolatilityProfile(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'stable' || normalized === 'aggressive') return normalized
+  return 'balanced'
+}
+
 let PgPool = null
 try {
   PgPool = require('pg').Pool
@@ -130,7 +136,72 @@ const TTS_CACHE = new Map() // In-memory cache for generated speech
 const realtimeClients = new Map()
 const RATE_LIMIT_BUCKETS = new Map()
 const DHAKA_LIVE_UPDATE_INTERVAL_MS = Number(process.env.DHAKA_LIVE_UPDATE_INTERVAL_MS || 60000)
+const MARKET_VOLATILITY_PROFILE = normalizeMarketVolatilityProfile(process.env.MARKET_VOLATILITY_PROFILE || 'balanced')
+const MARKET_PROFILE_PRESETS = Object.freeze({
+  stable: Object.freeze({
+    updateMs: 45000,
+    driftHardCapPct: 2.2,
+    shockChance: 0.004,
+    meanReversionWeight: 0.34,
+    momentumWeight: 0.12,
+    noiseMultiplier: 2.1,
+    peakHourVolatility: 1.2,
+    daytimeVolatility: 1.05,
+    offHourVolatility: 0.62,
+  }),
+  balanced: Object.freeze({
+    updateMs: 30000,
+    driftHardCapPct: 4.2,
+    shockChance: 0.015,
+    meanReversionWeight: 0.2,
+    momentumWeight: 0.18,
+    noiseMultiplier: 3.2,
+    peakHourVolatility: 1.35,
+    daytimeVolatility: 1.15,
+    offHourVolatility: 0.75,
+  }),
+  aggressive: Object.freeze({
+    updateMs: 16000,
+    driftHardCapPct: 6.5,
+    shockChance: 0.04,
+    meanReversionWeight: 0.12,
+    momentumWeight: 0.26,
+    noiseMultiplier: 4.1,
+    peakHourVolatility: 1.5,
+    daytimeVolatility: 1.28,
+    offHourVolatility: 0.88,
+  }),
+})
+const MARKET_ACTIVE_PROFILE = MARKET_PROFILE_PRESETS[MARKET_VOLATILITY_PROFILE]
+const MARKET_REALTIME_AUTO_UPDATE_MS = Math.max(
+  10000,
+  Number(process.env.MARKET_REALTIME_AUTO_UPDATE_MS || MARKET_ACTIVE_PROFILE.updateMs),
+)
+const MARKET_DRIFT_HARD_CAP_PCT = Math.max(1, Number(process.env.MARKET_DRIFT_HARD_CAP_PCT || MARKET_ACTIVE_PROFILE.driftHardCapPct))
+const MARKET_SHOCK_CHANCE = Math.min(0.2, Math.max(0, Number(process.env.MARKET_SHOCK_CHANCE || MARKET_ACTIVE_PROFILE.shockChance)))
+const MARKET_MEAN_REVERSION_WEIGHT = Math.min(1, Math.max(0, Number(process.env.MARKET_MEAN_REVERSION_WEIGHT || MARKET_ACTIVE_PROFILE.meanReversionWeight)))
+const MARKET_MOMENTUM_WEIGHT = Math.min(1, Math.max(0, Number(process.env.MARKET_MOMENTUM_WEIGHT || MARKET_ACTIVE_PROFILE.momentumWeight)))
+const MARKET_NOISE_MULTIPLIER = Math.max(0.5, Number(process.env.MARKET_NOISE_MULTIPLIER || MARKET_ACTIVE_PROFILE.noiseMultiplier))
+const MARKET_PEAK_HOUR_VOLATILITY = Math.max(0.2, Number(process.env.MARKET_PEAK_HOUR_VOLATILITY || MARKET_ACTIVE_PROFILE.peakHourVolatility))
+const MARKET_DAYTIME_VOLATILITY = Math.max(0.2, Number(process.env.MARKET_DAYTIME_VOLATILITY || MARKET_ACTIVE_PROFILE.daytimeVolatility))
+const MARKET_OFF_HOUR_VOLATILITY = Math.max(0.1, Number(process.env.MARKET_OFF_HOUR_VOLATILITY || MARKET_ACTIVE_PROFILE.offHourVolatility))
+const MARKET_CROP_VOLATILITY = Object.freeze({
+  rice: 0.45,
+  onion: 0.95,
+  wheat: 0.5,
+  maize: 0.7,
+  chili: 1.5,
+  lentil: 0.8,
+})
+const MARKET_LOCATION_VOLATILITY = Object.freeze({
+  dhaka: 1,
+  chittagong: 0.9,
+})
 let lastDhakaLiveUpdateAt = 0
+let marketRealtimeAutoUpdateTimer = null
+let marketRealtimeAutoUpdateInFlight = false
+let marketRealtimeAutoUpdateStarted = false
+const marketAnchorByPriceId = new Map()
 
 const SQL_SNAPSHOT_KEY = 'local-db'
 let sqlPool = null
@@ -2036,6 +2107,230 @@ function notifyPriceAlerts(db, price) {
   }
 }
 
+function sortMarketPriceRecords(records = []) {
+  return [...records].sort((a, b) => {
+    const locationDelta = String(a.location || '').localeCompare(String(b.location || ''))
+    if (locationDelta !== 0) return locationDelta
+
+    const cropDelta = String(a.crop || '').localeCompare(String(b.crop || ''))
+    if (cropDelta !== 0) return cropDelta
+
+    return String(a.market || '').localeCompare(String(b.market || ''))
+  })
+}
+
+function getMarketPriceKey(price) {
+  return String(price?.id || `${price?.crop || ''}|${price?.location || ''}|${price?.market || ''}`)
+}
+
+function clampMarketNumber(value, min, max) {
+  return Math.max(min, Math.min(max, value))
+}
+
+function getMarketVolatilityMultiplier(price, now = Date.now()) {
+  const cropKey = String(price?.crop || '').trim().toLowerCase()
+  const locationKey = String(price?.location || '').trim().toLowerCase()
+  const cropVolatility = MARKET_CROP_VOLATILITY[cropKey] ?? 0.75
+  const locationVolatility = MARKET_LOCATION_VOLATILITY[locationKey] ?? 0.95
+
+  const hour = new Date(now).getHours()
+  const marketHoursVolatility = hour >= 6 && hour <= 11
+    ? MARKET_PEAK_HOUR_VOLATILITY
+    : hour >= 12 && hour <= 17
+      ? MARKET_DAYTIME_VOLATILITY
+      : MARKET_OFF_HOUR_VOLATILITY
+
+  return cropVolatility * locationVolatility * marketHoursVolatility
+}
+
+function getMarketAnchorPrice(price) {
+  const key = getMarketPriceKey(price)
+  const currentPrice = Math.max(1, Number(price?.price || 0))
+  const previousAnchor = Number(marketAnchorByPriceId.get(key))
+
+  if (!Number.isFinite(previousAnchor) || previousAnchor <= 0) {
+    marketAnchorByPriceId.set(key, currentPrice)
+    return currentPrice
+  }
+
+  const nextAnchor = Number((previousAnchor * 0.96 + currentPrice * 0.04).toFixed(2))
+  marketAnchorByPriceId.set(key, nextAnchor)
+  return nextAnchor
+}
+
+function randomCenteredNoise() {
+  return ((Math.random() + Math.random() + Math.random() + Math.random()) / 4) - 0.5
+}
+
+function derivePriceTrend(changePercent = 0) {
+  if (changePercent > 0.05) return 'up'
+  if (changePercent < -0.05) return 'down'
+  return 'stable'
+}
+
+function calculateLiveMarketPriceUpdate(existing, now = Date.now()) {
+  const currentPrice = Math.max(1, Number(existing?.price || 0))
+  const anchorPrice = getMarketAnchorPrice(existing)
+  const volatility = getMarketVolatilityMultiplier(existing, now)
+
+  const trendDirection = existing?.trend === 'up' ? 1 : existing?.trend === 'down' ? -1 : 0
+  const boundedRecentChange = clampMarketNumber(Number(existing?.changePercent || 0), -2, 2)
+  const momentumDriftPct = trendDirection * Math.abs(boundedRecentChange) * MARKET_MOMENTUM_WEIGHT
+  const meanReversionDriftPct = ((anchorPrice - currentPrice) / Math.max(anchorPrice, 1)) * 100 * MARKET_MEAN_REVERSION_WEIGHT
+  const noiseDriftPct = randomCenteredNoise() * volatility * MARKET_NOISE_MULTIPLIER
+  const shockDriftPct = Math.random() < MARKET_SHOCK_CHANCE
+    ? (Math.random() < 0.5 ? -1 : 1) * (volatility * (1.5 + Math.random() * 1.8))
+    : 0
+
+  const driftPercent = clampMarketNumber(
+    noiseDriftPct + momentumDriftPct + meanReversionDriftPct + shockDriftPct,
+    -MARKET_DRIFT_HARD_CAP_PCT,
+    MARKET_DRIFT_HARD_CAP_PCT,
+  )
+
+  const nextPrice = Math.max(1, Number((currentPrice * (1 + driftPercent / 100)).toFixed(2)))
+  const changed = Math.abs(nextPrice - currentPrice) >= 0.01
+
+  if (!changed) {
+    return {
+      changed: false,
+      price: normalizePriceRecord(existing),
+    }
+  }
+
+  const change = Number((nextPrice - currentPrice).toFixed(2))
+  const changePercent = Number(((change / currentPrice) * 100).toFixed(2))
+  const previousMin = Number(existing?.min ?? currentPrice)
+  const previousMax = Number(existing?.max ?? currentPrice)
+  const previousAvg = Number(existing?.avg ?? currentPrice)
+
+  const updated = normalizePriceRecord({
+    ...existing,
+    price: nextPrice,
+    trend: derivePriceTrend(changePercent),
+    change,
+    changePercent,
+    min: Number.isFinite(previousMin) ? Math.min(previousMin, nextPrice) : nextPrice,
+    max: Number.isFinite(previousMax) ? Math.max(previousMax, nextPrice) : nextPrice,
+    avg: Number.isFinite(previousAvg) ? Number(((previousAvg * 4 + nextPrice) / 5).toFixed(2)) : nextPrice,
+    date: new Date(now).toISOString(),
+    lastUpdated: new Date(now).toLocaleString('en-US'),
+    lastUpdated_bn: new Date(now).toLocaleString('bn-BD'),
+  })
+
+  const key = getMarketPriceKey(updated)
+  const nextAnchor = Number((anchorPrice * 0.94 + updated.price * 0.06).toFixed(2))
+  marketAnchorByPriceId.set(key, nextAnchor)
+
+  return {
+    changed: true,
+    price: updated,
+  }
+}
+
+function getFilteredMarketPrices(db, locationParam = '', cropParam = '') {
+  const location = String(locationParam || '').trim()
+  const crop = String(cropParam || '').trim()
+
+  let prices = Object.values(db.prices || {}).map((row) => normalizePriceRecord(row))
+  if (location) {
+    prices = prices.filter((p) => String(p.location || '').toLowerCase() === location.toLowerCase())
+  }
+  if (crop) {
+    prices = prices.filter((p) => String(p.crop || '').toLowerCase() === crop.toLowerCase())
+  }
+  return sortMarketPriceRecords(prices)
+}
+
+function runLiveMarketDrift(db, options = {}) {
+  const {
+    locationParam = '',
+    cropParam = '',
+    force = false,
+    now = Date.now(),
+  } = options
+
+  const prices = getFilteredMarketPrices(db, locationParam, cropParam)
+  const updatedAtIso = new Date(now).toISOString()
+
+  // Avoid changing prices too frequently when clients poll aggressively.
+  if (!force && now - lastDhakaLiveUpdateAt < DHAKA_LIVE_UPDATE_INTERVAL_MS) {
+    return {
+      prices,
+      updatedAt: new Date(lastDhakaLiveUpdateAt || now).toISOString(),
+      live: true,
+      throttled: true,
+      count: prices.length,
+      profile: MARKET_VOLATILITY_PROFILE,
+      updateIntervalMs: MARKET_REALTIME_AUTO_UPDATE_MS,
+    }
+  }
+
+  const updatedPrices = []
+  const changedPrices = []
+
+  for (const existing of prices) {
+    const result = calculateLiveMarketPriceUpdate(existing, now)
+    updatedPrices.push(result.price)
+    if (!result.changed) continue
+
+    db.prices[existing.id] = result.price
+    changedPrices.push(result.price)
+
+    emitRealtime('prices:broadcast', {
+      action: 'update',
+      price: result.price,
+      updatedAt: updatedAtIso,
+      profile: MARKET_VOLATILITY_PROFILE,
+    })
+    notifyPriceAlerts(db, result.price)
+  }
+
+  if (changedPrices.length > 0) {
+    emitRealtime('prices:batch', {
+      action: 'batch-update',
+      prices: changedPrices,
+      updatedAt: updatedAtIso,
+      count: changedPrices.length,
+      profile: MARKET_VOLATILITY_PROFILE,
+    })
+    saveDb(db)
+  }
+
+  lastDhakaLiveUpdateAt = now
+  return {
+    prices: sortMarketPriceRecords(updatedPrices),
+    updatedAt: updatedAtIso,
+    live: true,
+    throttled: false,
+    count: updatedPrices.length,
+    profile: MARKET_VOLATILITY_PROFILE,
+    updateIntervalMs: MARKET_REALTIME_AUTO_UPDATE_MS,
+  }
+}
+
+function startMarketRealtimeAutoUpdateLoop() {
+  if (marketRealtimeAutoUpdateStarted) return
+  marketRealtimeAutoUpdateStarted = true
+
+  marketRealtimeAutoUpdateTimer = setInterval(async () => {
+    if (marketRealtimeAutoUpdateInFlight) return
+    marketRealtimeAutoUpdateInFlight = true
+    try {
+      const db = await loadDb()
+      runLiveMarketDrift(db, { force: true, now: Date.now() })
+    } catch (error) {
+      console.error('Market realtime auto-update failed', error)
+    } finally {
+      marketRealtimeAutoUpdateInFlight = false
+    }
+  }, MARKET_REALTIME_AUTO_UPDATE_MS)
+
+  if (typeof marketRealtimeAutoUpdateTimer?.unref === 'function') {
+    marketRealtimeAutoUpdateTimer.unref()
+  }
+}
+
 function getBearer(req) {
   const h = req.headers['authorization']
   if (h && typeof h === 'string' && h.startsWith('Bearer ')) {
@@ -3121,6 +3416,7 @@ async function generateTtsWithElevenLabs(text, language, apiKey) {
 }
 
 function createLocalApiMiddleware() {
+  startMarketRealtimeAutoUpdateLoop()
   return async function localApi(req, res, next) {
     try {
       const url = parseUrl(req)
@@ -4492,63 +4788,32 @@ function createLocalApiMiddleware() {
 
       // PRICES: list (filters)
       if (method === 'GET' && pathname === '/prices') {
-        const location = url.searchParams.get('location')
-        const crop = url.searchParams.get('crop')
-        let prices = Object.values(db.prices)
-        if (location) prices = prices.filter((p) => p.location === location)
-        if (crop) prices = prices.filter((p) => p.crop === crop)
-        return send(res, 200, { prices })
+        const location = (url.searchParams.get('location') || '').trim()
+        const crop = (url.searchParams.get('crop') || '').trim()
+        const prices = getFilteredMarketPrices(db, location, crop)
+        return send(res, 200, {
+          prices,
+          updatedAt: new Date(lastDhakaLiveUpdateAt || Date.now()).toISOString(),
+          live: false,
+          count: prices.length,
+          profile: MARKET_VOLATILITY_PROFILE,
+          updateIntervalMs: MARKET_REALTIME_AUTO_UPDATE_MS,
+        })
       }
 
       // PRICES: live feed (small simulated market drift)
       if (method === 'GET' && (pathname === '/prices/live' || pathname === '/prices/live/dhaka')) {
-        const now = Date.now()
         const locationParam = pathname === '/prices/live/dhaka'
           ? 'Dhaka'
           : (url.searchParams.get('location') || '').trim()
         const cropParam = (url.searchParams.get('crop') || '').trim()
-
-        let livePrices = Object.values(db.prices)
-        if (locationParam) {
-          livePrices = livePrices.filter((p) => String(p.location || '').toLowerCase() === locationParam.toLowerCase())
-        }
-        if (cropParam) {
-          livePrices = livePrices.filter((p) => String(p.crop || '').toLowerCase() === cropParam.toLowerCase())
-        }
-
-        // Avoid changing prices too frequently when clients poll aggressively.
-        if (now - lastDhakaLiveUpdateAt < DHAKA_LIVE_UPDATE_INTERVAL_MS) {
-          const normalizedPrices = livePrices.map((p) => normalizePriceRecord(p))
-          return send(res, 200, {
-            prices: normalizedPrices,
-            updatedAt: new Date(lastDhakaLiveUpdateAt || now).toISOString(),
-            live: true,
-            throttled: true,
-          })
-        }
-
-        const updatedPrices = livePrices.map((existing) => {
-          const drift = (Math.random() * 2.4) - 1.2
-          const nextPrice = Math.max(1, Math.round(existing.price * (1 + drift / 100)))
-          const updated = normalizePriceRecord({
-            ...existing,
-            price: nextPrice,
-            trend: drift > 0.1 ? 'up' : drift < -0.1 ? 'down' : 'stable',
-            changePercent: Number(drift.toFixed(2)),
-            date: nowIso(),
-            lastUpdated: new Date().toLocaleString('en-US'),
-            lastUpdated_bn: new Date().toLocaleString('bn-BD'),
-          })
-
-          db.prices[existing.id] = updated
-          emitRealtime('prices:broadcast', { action: 'update', price: updated })
-          notifyPriceAlerts(db, updated)
-          return updated
+        const livePayload = runLiveMarketDrift(db, {
+          locationParam,
+          cropParam,
+          force: false,
+          now: Date.now(),
         })
-
-        saveDb(db)
-        lastDhakaLiveUpdateAt = now
-        return send(res, 200, { prices: updatedPrices, updatedAt: nowIso(), live: true })
+        return send(res, 200, livePayload)
       }
 
       // PRICES: update (admin)
@@ -4558,19 +4823,85 @@ function createLocalApiMiddleware() {
         const current = db.users[authId]
         if (!current || !isPrimaryAdmin(current)) return send(res, 403, { error: 'Admin access required' })
         const body = await readJsonBody(req)
-        const price = {
-          id: id('price'),
-          ...body,
-          lastUpdated: new Date().toLocaleString('en-US'),
-          lastUpdated_bn: new Date().toLocaleString('bn-BD'),
+
+        const normalizedIncoming = normalizePriceRecord(body)
+        const targetPrice = Number(normalizedIncoming.price)
+        if (!normalizedIncoming.crop || normalizedIncoming.crop === 'Unknown Crop') {
+          return send(res, 400, { error: 'Valid crop is required' })
         }
-        db.prices[price.id] = price
+        if (!normalizedIncoming.location || normalizedIncoming.location === 'Unknown') {
+          return send(res, 400, { error: 'Valid location is required' })
+        }
+        if (!Number.isFinite(targetPrice) || targetPrice <= 0) {
+          return send(res, 400, { error: 'Valid numeric price is required' })
+        }
+
+        const normalizedMarket = String(normalizedIncoming.market || '').toLowerCase()
+        const existing = Object.values(db.prices || {})
+          .map((row) => normalizePriceRecord(row))
+          .find((row) => {
+            if (normalizedIncoming.id && row.id === normalizedIncoming.id) return true
+            return (
+              String(row.crop || '').toLowerCase() === String(normalizedIncoming.crop || '').toLowerCase() &&
+              String(row.location || '').toLowerCase() === String(normalizedIncoming.location || '').toLowerCase() &&
+              String(row.market || '').toLowerCase() === normalizedMarket
+            )
+          })
+
+        const previousPrice = Number(existing?.price || targetPrice)
+        const absoluteChange = Number((targetPrice - previousPrice).toFixed(2))
+        const changePercent = previousPrice > 0
+          ? Number(((absoluteChange / previousPrice) * 100).toFixed(2))
+          : 0
+
+        const now = Date.now()
+        const nextPriceRecord = normalizePriceRecord({
+          ...(existing || {}),
+          ...normalizedIncoming,
+          id: existing?.id || normalizedIncoming.id || id('price'),
+          price: targetPrice,
+          change: absoluteChange,
+          changePercent,
+          trend: derivePriceTrend(changePercent),
+          min: existing ? Math.min(Number(existing.min ?? previousPrice), targetPrice) : targetPrice,
+          max: existing ? Math.max(Number(existing.max ?? previousPrice), targetPrice) : targetPrice,
+          avg: existing
+            ? Number(((Number(existing.avg ?? previousPrice) * 4 + targetPrice) / 5).toFixed(2))
+            : targetPrice,
+          date: new Date(now).toISOString(),
+          lastUpdated: new Date(now).toLocaleString('en-US'),
+          lastUpdated_bn: new Date(now).toLocaleString('bn-BD'),
+        })
+
+        db.prices[nextPriceRecord.id] = nextPriceRecord
+        marketAnchorByPriceId.set(getMarketPriceKey(nextPriceRecord), Number(nextPriceRecord.avg || nextPriceRecord.price))
         saveDb(db)
 
-        emitRealtime('prices:broadcast', { action: 'new', price })
-        notifyPriceAlerts(db, price)
+        const action = existing ? 'update' : 'new'
+        const updatedAt = new Date(now).toISOString()
 
-        return send(res, 200, { price, message: 'Price updated' })
+        emitRealtime('prices:broadcast', {
+          action,
+          price: nextPriceRecord,
+          updatedAt,
+          profile: MARKET_VOLATILITY_PROFILE,
+        })
+        emitRealtime('prices:batch', {
+          action: 'manual-update',
+          prices: [nextPriceRecord],
+          updatedAt,
+          count: 1,
+          profile: MARKET_VOLATILITY_PROFILE,
+        })
+        notifyPriceAlerts(db, nextPriceRecord)
+
+        return send(res, 200, {
+          price: nextPriceRecord,
+          action,
+          updatedAt,
+          profile: MARKET_VOLATILITY_PROFILE,
+          message: existing ? 'Price updated' : 'Price created',
+        })
       }
 
       // ALERTS: create

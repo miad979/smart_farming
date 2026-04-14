@@ -2,9 +2,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { t } from '../utils/translations';
 import { useMarketPrices } from '../hooks/useMarketPrices';
-import { getLiveMarketPrices } from '../utils/api';
-import { TrendingUp, TrendingDown, Minus, Bell, Filter, Star, Activity, Loader2 } from 'lucide-react';
-import { subscribeSoftRefresh } from '../utils/softRefresh';
+import { createPriceAlert } from '../utils/api';
+import { storage, STORAGE_KEYS } from '../utils/storage';
+import { toast } from 'sonner';
+import { TrendingUp, TrendingDown, Minus, Bell, Filter, Star, Activity, Loader2, WifiOff, AlertTriangle } from 'lucide-react';
 
 type PriceItem = {
   id: string;
@@ -22,17 +23,30 @@ type PriceItem = {
   lastUpdated_bn?: string;
 };
 
+type AlertCondition = 'above' | 'below';
+
+const MARKET_FAVORITES_KEY = `${STORAGE_KEYS.FAVORITES}-market-prices`;
+
 export const MarketPrices: React.FC = () => {
   const { state } = useApp();
   const lang = state.language;
   const [selectedCrop, setSelectedCrop] = useState<string>('all');
   const [selectedMarket, setSelectedMarket] = useState<string>('all');
-  const [favorites, setFavorites] = useState<string[]>([]);
-  const [livePrices, setLivePrices] = useState<PriceItem[]>([]);
+  const [favorites, setFavorites] = useState<string[]>(() => {
+    const saved = storage.get<string[]>(MARKET_FAVORITES_KEY, []);
+    if (!Array.isArray(saved)) return [];
+    return saved
+      .map((entry) => String(entry || '').trim().toLowerCase())
+      .filter(Boolean);
+  });
   const [priceHistory, setPriceHistory] = useState<Record<string, number[]>>({});
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [isLiveLoading, setIsLiveLoading] = useState(false);
-  const [softRefreshTick, setSoftRefreshTick] = useState(0);
+  const [isAlertOpen, setIsAlertOpen] = useState(false);
+  const [alertCrop, setAlertCrop] = useState('');
+  const [alertLocation, setAlertLocation] = useState('');
+  const [alertTargetPrice, setAlertTargetPrice] = useState('');
+  const [alertCondition, setAlertCondition] = useState<AlertCondition>('above');
+  const [isAlertSubmitting, setIsAlertSubmitting] = useState(false);
+  const [alertError, setAlertError] = useState<string | null>(null);
 
   const buildSparklineGeometry = (values: number[], width = 120, height = 28, padding = 3) => {
     if (values.length === 0) {
@@ -68,60 +82,61 @@ export const MarketPrices: React.FC = () => {
 
   const locationFilter = selectedMarket === 'all' ? undefined : selectedMarket === 'dhaka' ? 'Dhaka' : 'Chittagong';
   const cropFilter = selectedCrop === 'all' ? undefined : `${selectedCrop.charAt(0).toUpperCase()}${selectedCrop.slice(1)}`;
-  const { prices, isLoading, error } = useMarketPrices(locationFilter, cropFilter);
+  const {
+    prices,
+    isLoading,
+    isRefreshing,
+    isRealtimeConnected,
+    isStale,
+    marketProfile,
+    lastUpdated,
+    error,
+    refresh,
+  } = useMarketPrices(locationFilter, cropFilter);
 
-  const fetchLivePrices = async () => {
-    setIsLiveLoading(true);
-    try {
-      const result = await getLiveMarketPrices(locationFilter, cropFilter);
-      const nextPrices: PriceItem[] = result.prices || [];
-      setLivePrices(nextPrices);
-      setPriceHistory((prev) => {
-        const next = { ...prev };
-        for (const item of nextPrices) {
-          const key = item.id || `${item.crop}-${item.location}`;
-          const existing = next[key] || [];
-          next[key] = [...existing, Number(item.price)].slice(-20);
+  useEffect(() => {
+    const nextPrices: PriceItem[] = prices || [];
+    if (nextPrices.length === 0) return;
+
+    setPriceHistory((prev) => {
+      const next = { ...prev };
+      for (const item of nextPrices) {
+        const key = item.id || `${item.crop}-${item.location}`;
+        const existing = next[key] || [];
+        const nextPricePoint = Number(item.price);
+        if (existing.length === 0 || existing[existing.length - 1] !== nextPricePoint) {
+          next[key] = [...existing, nextPricePoint].slice(-20);
         }
-        return next;
-      });
-      setLastUpdated(new Date());
-    } catch (err) {
-      console.error('Failed to fetch live Dhaka prices:', err);
-    } finally {
-      setIsLiveLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchLivePrices();
-    const interval = setInterval(fetchLivePrices, 60000);
-    return () => clearInterval(interval);
-  }, [selectedMarket, selectedCrop, softRefreshTick]);
-
-  useEffect(() => {
-    const unsubscribe = subscribeSoftRefresh(['market-prices', 'all'], () => {
-      setSoftRefreshTick((prev) => prev + 1);
+      }
+      return next;
     });
-    return unsubscribe;
-  }, []);
-
-  useEffect(() => {
-    if (prices.length > 0) {
-      setLastUpdated(new Date());
-    }
   }, [prices]);
 
+  useEffect(() => {
+    storage.set(MARKET_FAVORITES_KEY, favorites);
+  }, [favorites]);
+
   const displayPrices = useMemo(() => {
-    const source = livePrices.length > 0 ? livePrices : prices;
-    return source.filter((item: PriceItem) => {
+    const source = [...(prices || [])];
+    const filtered = source.filter((item: PriceItem) => {
       if (selectedCrop === 'all') return true;
       return item.crop.toLowerCase() === selectedCrop;
     });
-  }, [livePrices, prices, selectedCrop]);
+
+    return filtered.sort((a, b) => {
+      const aFav = favorites.includes(String(a.crop || '').toLowerCase()) ? 1 : 0;
+      const bFav = favorites.includes(String(b.crop || '').toLowerCase()) ? 1 : 0;
+      if (aFav !== bFav) return bFav - aFav;
+
+      const locationDelta = String(a.location || '').localeCompare(String(b.location || ''));
+      if (locationDelta !== 0) return locationDelta;
+
+      return String(a.crop || '').localeCompare(String(b.crop || ''));
+    });
+  }, [prices, selectedCrop, favorites]);
 
   const cropOptions = useMemo(() => {
-    const source = [...livePrices, ...prices];
+    const source = [...prices];
     const byKey = new Map<string, { en: string; bn?: string }>();
     for (const item of source) {
       const key = String(item.crop || '').toLowerCase();
@@ -133,14 +148,28 @@ export const MarketPrices: React.FC = () => {
     return Array.from(byKey.entries())
       .map(([key, value]) => ({ key, ...value }))
       .sort((a, b) => a.en.localeCompare(b.en));
-  }, [livePrices, prices]);
+  }, [prices]);
+
+  const locationOptions = useMemo(() => {
+    const byKey = new Map<string, { en: string; bn?: string }>();
+    for (const item of prices) {
+      const key = String(item.location || '').toLowerCase();
+      if (!key) continue;
+      if (!byKey.has(key)) {
+        byKey.set(key, { en: item.location, bn: item.location_bn });
+      }
+    }
+    return Array.from(byKey.values()).sort((a, b) => a.en.localeCompare(b.en));
+  }, [prices]);
 
   const toggleFavorite = (crop: string) => {
-    if (favorites.includes(crop)) {
-      setFavorites(favorites.filter((c) => c !== crop));
-    } else {
-      setFavorites([...favorites, crop]);
-    }
+    const key = String(crop || '').toLowerCase();
+    setFavorites((prev) => {
+      if (prev.includes(key)) {
+        return prev.filter((entry) => entry !== key);
+      }
+      return [...prev, key];
+    });
   };
 
   const formatLastUpdated = () => {
@@ -152,7 +181,80 @@ export const MarketPrices: React.FC = () => {
     });
   };
 
-  const topLive = (livePrices.length > 0 ? livePrices : prices)[0];
+  const openAlertDialog = () => {
+    if (state.userMode === 'guest' || !state.accessToken) {
+      toast.error(lang === 'bn' ? 'সতর্কতা সেট করতে লগইন করুন' : 'Please sign in to set alerts');
+      return;
+    }
+
+    const seed = displayPrices[0] || prices[0];
+    if (seed) {
+      setAlertCrop(seed.crop);
+      setAlertLocation(seed.location);
+      setAlertTargetPrice(String(Math.max(1, Math.round(Number(seed.price || 0)))));
+      setAlertCondition('above');
+    }
+    setAlertError(null);
+    setIsAlertOpen(true);
+  };
+
+  const closeAlertDialog = () => {
+    setIsAlertOpen(false);
+    setAlertError(null);
+  };
+
+  const submitAlert = async (event: React.FormEvent) => {
+    event.preventDefault();
+
+    if (!state.accessToken) {
+      setAlertError(lang === 'bn' ? 'অনুমতি নেই। আবার লগইন করুন।' : 'Session expired. Please sign in again.');
+      return;
+    }
+
+    const targetPrice = Number(alertTargetPrice);
+    if (!alertCrop || !alertLocation || !Number.isFinite(targetPrice) || targetPrice <= 0) {
+      setAlertError(lang === 'bn' ? 'সঠিক ফসল, বাজার এবং দাম দিন' : 'Please enter valid crop, market, and target price');
+      return;
+    }
+
+    const matched = prices.find(
+      (item) =>
+        String(item.crop || '').toLowerCase() === String(alertCrop || '').toLowerCase() &&
+        String(item.location || '').toLowerCase() === String(alertLocation || '').toLowerCase(),
+    );
+
+    try {
+      setIsAlertSubmitting(true);
+      setAlertError(null);
+
+      await createPriceAlert(state.accessToken, {
+        crop: alertCrop,
+        crop_bn: matched?.crop_bn || alertCrop,
+        targetPrice,
+        condition: alertCondition,
+        location: alertLocation,
+      });
+
+      toast.success(lang === 'bn' ? 'মূল্য সতর্কতা যুক্ত হয়েছে' : 'Price alert created');
+      setIsAlertOpen(false);
+    } catch (err: any) {
+      setAlertError(err?.message || (lang === 'bn' ? 'সতর্কতা তৈরি করা যায়নি' : 'Failed to create alert'));
+    } finally {
+      setIsAlertSubmitting(false);
+    }
+  };
+
+  const topLive = displayPrices[0] || prices[0];
+  const liveStatusLabel = !isRealtimeConnected
+    ? (lang === 'bn' ? 'পুনঃসংযোগ চলছে' : 'Reconnecting')
+    : isStale
+      ? (lang === 'bn' ? 'আপডেট দেরি হচ্ছে' : 'Delayed')
+      : (lang === 'bn' ? 'লাইভ' : 'Live');
+  const marketProfileLabel = marketProfile === 'stable'
+    ? (lang === 'bn' ? 'স্থিতিশীল মোড' : 'Stable Mode')
+    : marketProfile === 'aggressive'
+      ? (lang === 'bn' ? 'উচ্চ পরিবর্তন মোড' : 'High-Volatility Mode')
+      : (lang === 'bn' ? 'ব্যালেন্সড মোড' : 'Balanced Mode');
 
   return (
     <div className="space-y-6">
@@ -162,7 +264,11 @@ export const MarketPrices: React.FC = () => {
           <span className="px-2.5 py-1 text-xs rounded-full bg-primary/10 text-primary border border-primary/20">
             {lang === 'bn' ? 'সর্বশেষ আপডেট' : 'Last updated'}: {formatLastUpdated()}
           </span>
-          <button className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors shadow-sm">
+          <button
+            data-testid="market-set-alert-btn"
+            onClick={openAlertDialog}
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors shadow-sm"
+          >
             <Bell className="w-4 h-4" />
             {t('setAlert', lang)}
           </button>
@@ -179,13 +285,47 @@ export const MarketPrices: React.FC = () => {
             <h3 className="text-lg font-bold text-foreground mt-1">
               {topLive ? `${lang === 'bn' ? topLive.crop_bn : topLive.crop} - ৳${topLive.price}` : '--'}
             </h3>
-            <p className="text-xs text-muted-foreground mt-1">{lang === 'bn' ? 'প্রতি ১ মিনিটে আপডেট' : 'Updates every 1 minute'}</p>
+            <div className="mt-2 flex items-center gap-2">
+              <span
+                data-testid="market-live-status"
+                className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-[11px] font-semibold ${
+                  !isRealtimeConnected
+                    ? 'border-orange-500/30 bg-orange-500/10 text-orange-600'
+                    : isStale
+                      ? 'border-red-500/30 bg-red-500/10 text-red-600'
+                      : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600'
+                }`}
+              >
+                {!isRealtimeConnected ? <WifiOff className="w-3 h-3" /> : <Activity className="w-3 h-3" />}
+                {liveStatusLabel}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {lang === 'bn' ? 'অটো রিফ্রেশ সক্রিয়' : 'Auto refresh active'}
+              </span>
+              <span
+                data-testid="market-profile-badge"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-full border border-cyan-500/30 bg-cyan-500/10 text-cyan-600 text-[11px] font-semibold"
+              >
+                {marketProfileLabel}
+              </span>
+            </div>
           </div>
           <div className="w-9 h-9 rounded-full bg-emerald-500/15 flex items-center justify-center border border-emerald-500/20">
-            {isLiveLoading ? <Loader2 className="w-5 h-5 text-emerald-500 animate-spin" /> : <Activity className="w-5 h-5 text-emerald-500" />}
+            {isRefreshing ? <Loader2 className="w-5 h-5 text-emerald-500 animate-spin" /> : <Activity className="w-5 h-5 text-emerald-500" />}
           </div>
         </div>
       </div>
+
+      {(isStale || !isRealtimeConnected) && (
+        <div data-testid="market-stale-warning" className="rounded-2xl border border-orange-500/20 bg-orange-500/10 p-3 text-sm text-orange-700 flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4" />
+          <span>
+            {!isRealtimeConnected
+              ? (lang === 'bn' ? 'লাইভ সংযোগ বিচ্ছিন্ন। ব্যাকআপ পোলিং চলছে।' : 'Live connection dropped. Fallback polling is active.')
+              : (lang === 'bn' ? 'ডেটা আপডেট দেরিতে আসছে।' : 'Data updates are delayed.')}
+          </span>
+        </div>
+      )}
 
       <div className="rounded-2xl border border-border/70 bg-card/80 p-4 shadow-sm backdrop-blur-md">
         <div className="flex items-center gap-2 mb-4">
@@ -225,7 +365,8 @@ export const MarketPrices: React.FC = () => {
 
           <div className="flex items-end">
             <button
-              onClick={fetchLivePrices}
+              data-testid="market-refresh-now-btn"
+              onClick={refresh}
               className="w-full rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-emerald-500 hover:bg-emerald-500/15 transition-colors"
             >
               {lang === 'bn' ? 'এখনই রিফ্রেশ' : 'Refresh now'}
@@ -266,9 +407,9 @@ export const MarketPrices: React.FC = () => {
                     <h3 className="font-semibold text-lg">{lang === 'bn' ? item.crop_bn : item.crop}</h3>
                     <button
                       onClick={() => toggleFavorite(item.crop)}
-                      className={`p-1 ${favorites.includes(item.crop) ? 'text-yellow-500' : 'text-gray-400'}`}
+                      className={`p-1 ${favorites.includes(String(item.crop || '').toLowerCase()) ? 'text-yellow-500' : 'text-gray-400'}`}
                     >
-                      <Star className={`w-4 h-4 ${favorites.includes(item.crop) ? 'fill-current' : ''}`} />
+                      <Star className={`w-4 h-4 ${favorites.includes(String(item.crop || '').toLowerCase()) ? 'fill-current' : ''}`} />
                     </button>
                   </div>
                   <p className="text-sm text-muted-foreground">{lang === 'bn' ? (item.location_bn || item.location) : item.location} • {item.market || 'Market'}</p>
@@ -340,6 +481,112 @@ export const MarketPrices: React.FC = () => {
           </div>
         )}
       </div>
+
+      {isAlertOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={closeAlertDialog} />
+          <div data-testid="market-alert-dialog" className="relative z-10 w-full max-w-md rounded-2xl border border-border/70 bg-card p-5 shadow-xl">
+            <h3 className="text-lg font-bold mb-1">{lang === 'bn' ? 'মূল্য সতর্কতা সেট করুন' : 'Set Price Alert'}</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              {lang === 'bn'
+                ? 'দাম নির্দিষ্ট সীমা অতিক্রম করলে নোটিফিকেশন পাবেন'
+                : 'You will be notified when the target threshold is crossed'}
+            </p>
+
+            <form onSubmit={submitAlert} className="space-y-3">
+              <div>
+                <label className="block text-sm text-muted-foreground mb-1">{lang === 'bn' ? 'ফসল' : 'Crop'}</label>
+                <select
+                  data-testid="market-alert-crop-input"
+                  value={alertCrop}
+                  onChange={(e) => setAlertCrop(e.target.value)}
+                  className="w-full rounded-lg border border-border/70 bg-background px-3 py-2"
+                  required
+                >
+                  {cropOptions.map((entry) => (
+                    <option key={entry.key} value={entry.en}>
+                      {lang === 'bn' ? (entry.bn || entry.en) : entry.en}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm text-muted-foreground mb-1">{lang === 'bn' ? 'বাজার' : 'Market'}</label>
+                <select
+                  data-testid="market-alert-location-input"
+                  value={alertLocation}
+                  onChange={(e) => setAlertLocation(e.target.value)}
+                  className="w-full rounded-lg border border-border/70 bg-background px-3 py-2"
+                  required
+                >
+                  {locationOptions.map((entry) => (
+                    <option key={entry.en} value={entry.en}>
+                      {lang === 'bn' ? (entry.bn || entry.en) : entry.en}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm text-muted-foreground mb-1">{lang === 'bn' ? 'শর্ত' : 'Condition'}</label>
+                  <select
+                    data-testid="market-alert-condition-input"
+                    value={alertCondition}
+                    onChange={(e) => setAlertCondition(e.target.value as AlertCondition)}
+                    className="w-full rounded-lg border border-border/70 bg-background px-3 py-2"
+                  >
+                    <option value="above">{lang === 'bn' ? 'বেশি হলে' : 'Above'}</option>
+                    <option value="below">{lang === 'bn' ? 'কম হলে' : 'Below'}</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm text-muted-foreground mb-1">{lang === 'bn' ? 'টার্গেট দাম' : 'Target Price'}</label>
+                  <input
+                    data-testid="market-alert-target-input"
+                    type="number"
+                    min="1"
+                    step="0.01"
+                    value={alertTargetPrice}
+                    onChange={(e) => setAlertTargetPrice(e.target.value)}
+                    className="w-full rounded-lg border border-border/70 bg-background px-3 py-2"
+                    required
+                  />
+                </div>
+              </div>
+
+              {alertError && (
+                <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-600">
+                  {alertError}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  data-testid="market-alert-close-btn"
+                  onClick={closeAlertDialog}
+                  className="px-3 py-2 rounded-lg border border-border/70 bg-background hover:bg-muted"
+                >
+                  {lang === 'bn' ? 'বাতিল' : 'Cancel'}
+                </button>
+                <button
+                  type="submit"
+                  data-testid="market-alert-submit-btn"
+                  disabled={isAlertSubmitting}
+                  className="px-3 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+                >
+                  {isAlertSubmitting
+                    ? (lang === 'bn' ? 'সেভ হচ্ছে...' : 'Saving...')
+                    : (lang === 'bn' ? 'সেভ করুন' : 'Save Alert')}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

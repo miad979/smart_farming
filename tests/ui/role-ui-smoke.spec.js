@@ -284,6 +284,22 @@ test.describe.serial('Role-based UI smoke checks', () => {
     await expect(page.getByRole('heading', { name: 'Irrigation', exact: true })).toBeVisible();
     await expect(page.getByText('Loading live irrigation data...')).toHaveCount(0, { timeout: 30000 });
 
+    await page.goto(`${APP_BASE_URL}/prices`, { waitUntil: 'domcontentloaded' });
+    await expect(page).toHaveURL(/\/prices(?:\?.*)?$/);
+    await expect(page.getByRole('heading', { name: 'Prices', exact: true })).toBeVisible();
+    await expect(page.getByTestId('market-live-status')).toBeVisible();
+    await expect(page.getByTestId('market-profile-badge')).toBeVisible();
+    await expect(page.getByTestId('market-refresh-now-btn')).toBeVisible();
+    await page.getByTestId('market-refresh-now-btn').click();
+
+    await expect(page.getByTestId('market-set-alert-btn')).toBeVisible();
+    await page.getByTestId('market-set-alert-btn').click();
+    await expect(page.getByTestId('market-alert-dialog')).toBeVisible();
+    await expect(page.getByTestId('market-alert-crop-input')).toBeVisible();
+    await expect(page.getByTestId('market-alert-location-input')).toBeVisible();
+    await page.getByTestId('market-alert-close-btn').click();
+    await expect(page.getByTestId('market-alert-dialog')).toHaveCount(0);
+
     await context.close();
   });
 
