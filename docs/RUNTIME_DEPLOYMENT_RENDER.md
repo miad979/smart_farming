@@ -33,6 +33,12 @@ These must be set before release:
 - `AUTH_TOKEN_SECRET`
 - `CORS_ALLOWED_ORIGINS`
 
+Recommended hardening values:
+
+- `FORCE_SECURE_COOKIES=true`
+- `AUTH_COOKIE_SAME_SITE=Lax`
+- `CSRF_COOKIE_SAME_SITE=Lax`
+
 Recommended:
 
 - `DATABASE_URL` (if using PostgreSQL snapshot storage)
@@ -62,6 +68,17 @@ On PowerShell:
 $env:NODE_ENV='production'; node server/check-production-env.cjs
 ```
 
+## Final Hardening Pass
+
+The runtime now supports stricter hardening controls:
+
+- CSP on runtime responses (default enabled)
+- secure cookie enforcement in production
+- configurable route and auth rate limits
+- realtime connection throttling per IP
+
+Optional CSP and throttling overrides are listed in `.env.production.example`.
+
 ## Deploy and Verify
 
 1. Trigger a Render deploy.
@@ -72,6 +89,21 @@ $env:NODE_ENV='production'; node server/check-production-env.cjs
    - disease detection
    - chat assistant
    - realtime updates
+
+### Endpoint Verification Commands
+
+Replace `<service-url>` with your Render URL.
+
+```bash
+curl -i https://<service-url>/api/health
+curl -i https://<service-url>/
+curl -i https://<service-url>/api/realtime/stream
+```
+
+Expected:
+- `/api/health` returns `200` and JSON status
+- `/` returns `200` and includes `Content-Security-Policy` header
+- `/api/realtime/stream` returns `200` with `text/event-stream`
 
 ## Optional GitHub Auto-Deploy
 

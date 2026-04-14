@@ -5,6 +5,54 @@ const { createLocalApiMiddleware } = require('./local-api.cjs')
 
 const PORT = Number(process.env.PORT || 4173)
 const DIST_DIR = path.resolve(process.cwd(), 'dist')
+const CSP_REPORT_ONLY = String(process.env.CSP_REPORT_ONLY || 'false').toLowerCase() === 'true'
+
+function buildDefaultCsp() {
+  const extraConnectSrc = String(process.env.CSP_EXTRA_CONNECT_SRC || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)
+
+  const connectSrc = ["'self'", 'https:', 'wss:', ...extraConnectSrc].join(' ')
+
+  return [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    `connect-src ${connectSrc}`,
+    "media-src 'self' data: blob:",
+    "worker-src 'self' blob:",
+    "form-action 'self'",
+    'upgrade-insecure-requests',
+  ].join('; ')
+}
+
+const CONTENT_SECURITY_POLICY = (process.env.CONTENT_SECURITY_POLICY || buildDefaultCsp()).trim()
+
+function isHttpsRequest(req) {
+  const proto = req.headers['x-forwarded-proto']
+  return Boolean(req.socket?.encrypted || (typeof proto === 'string' && proto.toLowerCase().includes('https')))
+}
+
+function setSecurityHeaders(req, res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'DENY')
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none')
+  res.setHeader(CSP_REPORT_ONLY ? 'Content-Security-Policy-Report-Only' : 'Content-Security-Policy', CONTENT_SECURITY_POLICY)
+
+  if (isHttpsRequest(req)) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+  }
+}
 
 function getContentType(filePath) {
   const ext = path.extname(filePath).toLowerCase()
@@ -68,6 +116,8 @@ function serveStatic(req, res) {
 const apiMiddleware = createLocalApiMiddleware()
 
 const server = http.createServer((req, res) => {
+  setSecurityHeaders(req, res)
+
   if ((req.url || '').startsWith('/api')) {
     // Strip /api prefix for the middleware (so routes stay /health, /auth/signin, etc.)
     req.url = req.url.slice('/api'.length) || '/'

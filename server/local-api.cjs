@@ -42,6 +42,21 @@ function loadLocalEnvFiles() {
 
 loadLocalEnvFiles()
 
+function parseEnvInt(name, fallback, minValue = 1) {
+  const raw = process.env[name]
+  if (raw === undefined || raw === null || String(raw).trim() === '') return fallback
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(minValue, Math.floor(parsed))
+}
+
+function normalizeSameSite(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'strict') return 'Strict'
+  if (normalized === 'none') return 'None'
+  return 'Lax'
+}
+
 let PgPool = null
 try {
   PgPool = require('pg').Pool
@@ -75,9 +90,20 @@ const AUTH_COOKIE_NAME = 'sf_access_token'
 const CSRF_COOKIE_NAME = 'sf_csrf'
 const CSRF_HEADER_NAME = 'x-csrf-token'
 const FORCE_SECURE_COOKIES = String(process.env.FORCE_SECURE_COOKIES || 'false').toLowerCase() === 'true'
+const AUTH_COOKIE_SAME_SITE = normalizeSameSite(process.env.AUTH_COOKIE_SAME_SITE || 'Lax')
+const CSRF_COOKIE_SAME_SITE = normalizeSameSite(process.env.CSRF_COOKIE_SAME_SITE || AUTH_COOKIE_SAME_SITE)
 const LOGIN_LOCKOUT_WINDOW_MS = Math.max(60 * 1000, Number(process.env.LOGIN_LOCKOUT_WINDOW_MS || 15 * 60 * 1000))
 const LOGIN_LOCKOUT_DURATION_MS = Math.max(60 * 1000, Number(process.env.LOGIN_LOCKOUT_DURATION_MS || 30 * 60 * 1000))
 const LOGIN_LOCKOUT_THRESHOLD = Math.max(3, Number(process.env.LOGIN_LOCKOUT_THRESHOLD || 8))
+const RATE_LIMIT_GLOBAL_PER_MINUTE = parseEnvInt('RATE_LIMIT_GLOBAL_PER_MINUTE', IS_PRODUCTION ? 120 : 240, 20)
+const RATE_LIMIT_SIGNIN_PER_10_MINUTES = parseEnvInt('RATE_LIMIT_SIGNIN_PER_10_MINUTES', IS_PRODUCTION ? 20 : 50, 5)
+const RATE_LIMIT_SIGNUP_PER_10_MINUTES = parseEnvInt('RATE_LIMIT_SIGNUP_PER_10_MINUTES', IS_PRODUCTION ? 10 : 20, 3)
+const RATE_LIMIT_UPLOADS_PER_5_MINUTES = parseEnvInt('RATE_LIMIT_UPLOADS_PER_5_MINUTES', IS_PRODUCTION ? 20 : 30, 5)
+const RATE_LIMIT_USERS_MUTATION_PER_MINUTE = parseEnvInt('RATE_LIMIT_USERS_MUTATION_PER_MINUTE', IS_PRODUCTION ? 40 : 80, 10)
+const RATE_LIMIT_DOCTOR_VERIFY_PER_MINUTE = parseEnvInt('RATE_LIMIT_DOCTOR_VERIFY_PER_MINUTE', IS_PRODUCTION ? 30 : 60, 5)
+const RATE_LIMIT_SIGNIN_EMAIL_PER_10_MINUTES = parseEnvInt('RATE_LIMIT_SIGNIN_EMAIL_PER_10_MINUTES', IS_PRODUCTION ? 8 : 12, 3)
+const RATE_LIMIT_REALTIME_CONNECT_PER_MINUTE = parseEnvInt('RATE_LIMIT_REALTIME_CONNECT_PER_MINUTE', IS_PRODUCTION ? 20 : 40, 5)
+const RATE_LIMIT_REALTIME_CONNECTIONS_PER_IP = parseEnvInt('RATE_LIMIT_REALTIME_CONNECTIONS_PER_IP', IS_PRODUCTION ? 5 : 20, 1)
 const CORS_ALLOWED_ORIGINS = new Set(
   String(process.env.CORS_ALLOWED_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173')
     .split(',')
@@ -1760,27 +1786,33 @@ function applyRateLimit(res, key, windowMs, maxRequests) {
 }
 
 function enforceRouteRateLimits(req, res, { method, pathname, ip }) {
-  if (pathname === '/health' || pathname === '/realtime/stream') return true
-  if (!applyRateLimit(res, `global:${ip}`, 60 * 1000, 240)) return false
+  if (pathname === '/health') return true
+
+  if (pathname === '/realtime/stream') {
+    if (!applyRateLimit(res, `realtime-connect:${ip}`, 60 * 1000, RATE_LIMIT_REALTIME_CONNECT_PER_MINUTE)) return false
+    return true
+  }
+
+  if (!applyRateLimit(res, `global:${ip}`, 60 * 1000, RATE_LIMIT_GLOBAL_PER_MINUTE)) return false
 
   if (method === 'POST' && pathname === '/auth/signin') {
-    if (!applyRateLimit(res, `signin:${ip}`, 10 * 60 * 1000, 50)) return false
+    if (!applyRateLimit(res, `signin:${ip}`, 10 * 60 * 1000, RATE_LIMIT_SIGNIN_PER_10_MINUTES)) return false
   }
 
   if (method === 'POST' && pathname === '/auth/signup') {
-    if (!applyRateLimit(res, `signup:${ip}`, 10 * 60 * 1000, 20)) return false
+    if (!applyRateLimit(res, `signup:${ip}`, 10 * 60 * 1000, RATE_LIMIT_SIGNUP_PER_10_MINUTES)) return false
   }
 
   if (method === 'POST' && pathname === '/uploads/documents') {
-    if (!applyRateLimit(res, `uploads:${ip}`, 5 * 60 * 1000, 30)) return false
+    if (!applyRateLimit(res, `uploads:${ip}`, 5 * 60 * 1000, RATE_LIMIT_UPLOADS_PER_5_MINUTES)) return false
   }
 
   if ((method === 'PUT' || method === 'DELETE') && pathname.startsWith('/users/')) {
-    if (!applyRateLimit(res, `users-mutation:${ip}`, 60 * 1000, 80)) return false
+    if (!applyRateLimit(res, `users-mutation:${ip}`, 60 * 1000, RATE_LIMIT_USERS_MUTATION_PER_MINUTE)) return false
   }
 
   if (method === 'POST' && /^\/doctors\/[^/]+\/verify$/.test(pathname)) {
-    if (!applyRateLimit(res, `doctor-verify:${ip}`, 60 * 1000, 60)) return false
+    if (!applyRateLimit(res, `doctor-verify:${ip}`, 60 * 1000, RATE_LIMIT_DOCTOR_VERIFY_PER_MINUTE)) return false
   }
 
   return true
@@ -1797,6 +1829,7 @@ function setSecurityHeaders(req, res) {
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none')
 
   const proto = req.headers['x-forwarded-proto']
   const isHttps = req.socket?.encrypted || (typeof proto === 'string' && proto.toLowerCase().includes('https'))
@@ -1832,6 +1865,14 @@ function emitRealtime(channel, data, userId) {
     if (userId && client.userId !== userId) continue
     writeSse(client.res, channel, data)
   }
+}
+
+function countRealtimeConnectionsForIp(ip) {
+  let count = 0
+  for (const [, client] of realtimeClients) {
+    if (client.ip === ip) count += 1
+  }
+  return count
 }
 
 function containsBanglaScript(text) {
@@ -2165,7 +2206,7 @@ function parseCookies(req) {
 }
 
 function shouldUseSecureCookies(req) {
-  if (FORCE_SECURE_COOKIES) return true
+  if (FORCE_SECURE_COOKIES || IS_PRODUCTION) return true
   const proto = req.headers['x-forwarded-proto']
   return Boolean(req.socket?.encrypted || (typeof proto === 'string' && proto.toLowerCase().includes('https')))
 }
@@ -2199,7 +2240,7 @@ function issueCsrfToken(res, req, token) {
     res,
     serializeCookie(CSRF_COOKIE_NAME, token, {
       path: '/',
-      sameSite: 'Lax',
+      sameSite: CSRF_COOKIE_SAME_SITE,
       secure,
       maxAge: Math.floor(AUTH_TOKEN_TTL_MS / 1000),
     }),
@@ -2221,7 +2262,7 @@ function setAuthCookies(res, req, token) {
     serializeCookie(AUTH_COOKIE_NAME, token, {
       path: '/',
       httpOnly: true,
-      sameSite: 'Lax',
+      sameSite: AUTH_COOKIE_SAME_SITE,
       secure,
       maxAge: Math.floor(AUTH_TOKEN_TTL_MS / 1000),
     }),
@@ -2236,7 +2277,7 @@ function clearAuthCookies(res, req) {
     serializeCookie(AUTH_COOKIE_NAME, '', {
       path: '/',
       httpOnly: true,
-      sameSite: 'Lax',
+      sameSite: AUTH_COOKIE_SAME_SITE,
       secure,
       maxAge: 0,
     }),
@@ -2245,7 +2286,7 @@ function clearAuthCookies(res, req) {
     res,
     serializeCookie(CSRF_COOKIE_NAME, '', {
       path: '/',
-      sameSite: 'Lax',
+      sameSite: CSRF_COOKIE_SAME_SITE,
       secure,
       maxAge: 0,
     }),
@@ -2898,6 +2939,11 @@ function createLocalApiMiddleware() {
         const tokenFromQuery = url.searchParams.get('token')
         const userId = authUserIdFromToken(tokenFromQuery) || authUserIdFromReq(req)
 
+        if (countRealtimeConnectionsForIp(clientIp) >= RATE_LIMIT_REALTIME_CONNECTIONS_PER_IP) {
+          res.setHeader('Retry-After', '30')
+          return send(res, 429, { error: 'Too many realtime connections from this IP. Please retry shortly.' })
+        }
+
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache, no-transform',
@@ -2906,7 +2952,7 @@ function createLocalApiMiddleware() {
         })
 
         const clientId = id('rt')
-        realtimeClients.set(clientId, { res, userId })
+        realtimeClients.set(clientId, { res, userId, ip: clientIp })
         writeSse(res, 'connection', { status: 'connected', userId: userId || null })
 
         const heartbeat = setInterval(() => {
@@ -3237,7 +3283,12 @@ function createLocalApiMiddleware() {
         const { email, password } = body || {}
         const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : ''
 
-        if (!applyRateLimit(res, `signin-email:${clientIp}:${normalizedEmail || 'unknown'}`, 10 * 60 * 1000, 12)) return
+        if (!applyRateLimit(
+          res,
+          `signin-email:${clientIp}:${normalizedEmail || 'unknown'}`,
+          10 * 60 * 1000,
+          RATE_LIMIT_SIGNIN_EMAIL_PER_10_MINUTES,
+        )) return
 
         if (!normalizedEmail || !password) return send(res, 400, { error: 'Email and password are required' })
 

@@ -14,8 +14,22 @@ services:
         generateValue: true
       - key: FORCE_SECURE_COOKIES
         value: "true"
+      - key: AUTH_COOKIE_SAME_SITE
+        value: Lax
+      - key: CSRF_COOKIE_SAME_SITE
+        value: Lax
       - key: CORS_ALLOWED_ORIGINS
         value: https://smart-farming-runtime.onrender.com
+      - key: RATE_LIMIT_GLOBAL_PER_MINUTE
+        value: "120"
+      - key: RATE_LIMIT_SIGNIN_PER_10_MINUTES
+        value: "20"
+      - key: RATE_LIMIT_SIGNIN_EMAIL_PER_10_MINUTES
+        value: "8"
+      - key: RATE_LIMIT_REALTIME_CONNECT_PER_MINUTE
+        value: "20"
+      - key: RATE_LIMIT_REALTIME_CONNECTIONS_PER_IP
+        value: "5"
       - key: DATABASE_URL
         sync: false
       - key: SQL_SSL

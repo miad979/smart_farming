@@ -1,5 +1,24 @@
 const { URL } = require('url')
 
+function validateSameSiteEnv(name, fallback) {
+  const value = String(process.env[name] || fallback || '').trim().toLowerCase()
+  if (!['lax', 'strict', 'none'].includes(value)) {
+    console.error(`[env] ${name} must be one of: Lax, Strict, None`)
+    process.exit(1)
+  }
+  return value
+}
+
+function validatePositiveIntegerEnv(name) {
+  const raw = process.env[name]
+  if (raw === undefined || raw === null || String(raw).trim() === '') return
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    console.error(`[env] ${name} must be a positive integer when set.`)
+    process.exit(1)
+  }
+}
+
 const nodeEnv = String(process.env.NODE_ENV || '').toLowerCase()
 const isProduction = nodeEnv === 'production'
 
@@ -46,6 +65,25 @@ for (const origin of corsOrigins) {
     console.error(`[env] Unsupported origin protocol for CORS_ALLOWED_ORIGINS: ${origin}`)
     process.exit(1)
   }
+}
+
+const authCookieSameSite = validateSameSiteEnv('AUTH_COOKIE_SAME_SITE', 'Lax')
+validateSameSiteEnv('CSRF_COOKIE_SAME_SITE', authCookieSameSite)
+
+const rateLimitVars = [
+  'RATE_LIMIT_GLOBAL_PER_MINUTE',
+  'RATE_LIMIT_SIGNIN_PER_10_MINUTES',
+  'RATE_LIMIT_SIGNUP_PER_10_MINUTES',
+  'RATE_LIMIT_UPLOADS_PER_5_MINUTES',
+  'RATE_LIMIT_USERS_MUTATION_PER_MINUTE',
+  'RATE_LIMIT_DOCTOR_VERIFY_PER_MINUTE',
+  'RATE_LIMIT_SIGNIN_EMAIL_PER_10_MINUTES',
+  'RATE_LIMIT_REALTIME_CONNECT_PER_MINUTE',
+  'RATE_LIMIT_REALTIME_CONNECTIONS_PER_IP',
+]
+
+for (const name of rateLimitVars) {
+  validatePositiveIntegerEnv(name)
 }
 
 const hasAiProvider = Boolean(
