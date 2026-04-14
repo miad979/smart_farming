@@ -1,7 +1,8 @@
-const REQUIRED_CHECK = process.env.REQUIRED_CHECK || 'UI Smoke CI / required-ui-smoke';
+const REQUIRED_CHECK = process.env.REQUIRED_CHECK || 'required-ui-smoke';
 const REPO_SLUG = process.env.GITHUB_REPOSITORY || process.env.REPO_SLUG || '';
 const TOKEN = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || '';
-const BRANCHES = String(process.env.PROTECT_BRANCHES || 'main,master')
+const APPEND_EXISTING_CONTEXTS = String(process.env.APPEND_EXISTING_CONTEXTS || 'false').toLowerCase() === 'true';
+const BRANCHES = String(process.env.PROTECT_BRANCHES || 'main')
   .split(',')
   .map((item) => item.trim())
   .filter(Boolean);
@@ -76,14 +77,16 @@ async function ensureRequiredCheck(branch) {
     ]);
   }
 
-  const mergedContexts = uniqueContexts([...existingContexts, REQUIRED_CHECK]);
+  const targetContexts = APPEND_EXISTING_CONTEXTS
+    ? uniqueContexts([...existingContexts, REQUIRED_CHECK])
+    : uniqueContexts([REQUIRED_CHECK]);
 
   if (currentRequired.ok) {
     const updateRequired = await ghRequest(requiredStatusPath, {
       method: 'PATCH',
       body: {
         strict: true,
-        contexts: mergedContexts,
+        contexts: targetContexts,
       },
     });
 
@@ -108,7 +111,7 @@ async function ensureRequiredCheck(branch) {
     body: {
       required_status_checks: {
         strict: true,
-        contexts: mergedContexts,
+        contexts: targetContexts,
       },
       enforce_admins: false,
       required_pull_request_reviews: null,
