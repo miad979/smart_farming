@@ -389,6 +389,32 @@ Result:
   - White-box: internal workflow scripts validating lockout, CSRF, audit log internals
   - Grey-box: role/action workflow tests combining API behavior with domain knowledge
 
+### Phase I: Guided human UAT/usability checklist (step-by-step)
+- Date: 2026-04-14
+- Commit: N/A (execution-only guided session)
+- Context:
+  - guided checklist executed interactively with user
+  - public quick-tunnel URL was refreshed during run due tunnel expiry/network instability
+  - final run completed on stable HTTP2 tunnel transport
+- Step results:
+
+| Step | Area | Initial Status | Final Status | Notes |
+|---|---|---|---|---|
+| 1 | Home load and first impression | Blocked | Pass | first URL unavailable; rerun succeeded |
+| 2 | Navigation clarity | Blocked | Pass | tunnel dropped; retried on refreshed URL |
+| 3 | Language toggle usability | N/A | Pass | language switch verified by user |
+| 4 | Disease detection demo flow | N/A | Pass | demo report flow confirmed |
+| 5 | Irrigation usability | N/A | Pass | user requested virtual pump/motor simulation feature |
+| 6 | Market prices readability | N/A | Pass | values/trends readable |
+| 7 | Profile/login form usability | N/A | Pass | labels/messages understandable |
+| 8 | Keyboard accessibility smoke | N/A | Pass | no major keyboard focus blockers reported |
+| 9 | Final UAT acceptance decision | N/A | Pass | accepted for pilot/demo use |
+
+- Outcome summary:
+  - Final UAT decision: PASS
+  - Usability decision: PASS
+  - Follow-up enhancement requested: virtual IoT water-pump simulation for irrigation automation testing
+
 ## 8) What Was Modified to Improve Testability
 
 ### Test infrastructure
@@ -531,7 +557,7 @@ node server/check-production-env.cjs
 
 ---
 
-Document version: 2.3
+Document version: 2.4
 Status: Active and maintained
 Last updated: 2026-04-14
 Owner: Engineering / QA
