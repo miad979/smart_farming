@@ -141,6 +141,7 @@ export const Irrigation: React.FC = () => {
   const [autoSimulation, setAutoSimulation] = useState(true);
   const [simulatedMoistureInput, setSimulatedMoistureInput] = useState(58);
   const [manualPumpLiters, setManualPumpLiters] = useState(45);
+  const [manualPumpRuntimeMinutes, setManualPumpRuntimeMinutes] = useState(2);
   const [lastPumpSimulation, setLastPumpSimulation] = useState<PumpSimulationResult | null>(null);
   const [yieldAdvice, setYieldAdvice] = useState<YieldAdvice | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -735,7 +736,9 @@ export const Irrigation: React.FC = () => {
 
   const waterNow = async () => {
     const maxVolume = Math.max(1, Number(data.policy?.maxVolume || 150));
-    const manualLiters = Math.max(1, Math.min(maxVolume, Math.round(Number(manualPumpLiters || 45))));
+    const absoluteMaxLiters = maxVolume * 10; // Allow up to 10x the policy max
+    const manualLiters = Math.max(1, Math.min(absoluteMaxLiters, Math.round(Number(manualPumpLiters || 45))));
+    const runtimeMinutes = Math.max(1, Math.min(120, Math.round(Number(manualPumpRuntimeMinutes || 2))));
 
     // Show immediate intent in UI so manual action feels responsive.
     setData((prev) => ({
@@ -745,8 +748,9 @@ export const Irrigation: React.FC = () => {
     setVirtualDevice((prev) => (prev ? { ...prev, actuatorState: 'watering' } : prev));
     setLastPumpSimulation({
       action: 'watering',
-      message: lang === 'bn' ? 'ম্যানুয়াল ওয়াটারিং শুরু হয়েছে' : 'Manual watering started',
+      message: lang === 'bn' ? `${runtimeMinutes} মিনিটের জন্য ম্যানুয়াল ওয়াটারিং শুরু` : `Manual watering for ${runtimeMinutes} min`,
       appliedLiters: manualLiters,
+      runtimeSeconds: runtimeMinutes * 60,
     });
 
     if (state.userMode === 'guest' || !state.accessToken || !state.user.id) {
@@ -760,8 +764,9 @@ export const Irrigation: React.FC = () => {
       }));
       setLastPumpSimulation({
         action: 'watering',
-        message: lang === 'bn' ? 'ম্যানুয়াল ওয়াটারিং সফল' : 'Manual watering completed',
+        message: lang === 'bn' ? `${runtimeMinutes} মিনিটের জন্য ম্যানুয়াল ওয়াটারিং সম্পূর্ণ` : `Manual watering completed for ${runtimeMinutes} min`,
         appliedLiters: manualLiters,
+        runtimeSeconds: runtimeMinutes * 60,
       });
       setLastUpdated(new Date());
       return;
@@ -771,6 +776,7 @@ export const Irrigation: React.FC = () => {
       measuredMoisture: Number(data.moisture || 68),
       forcePump: 'on',
       manualLiters,
+      manualRuntimeMinutes: runtimeMinutes,
     });
   };
 
@@ -891,10 +897,12 @@ export const Irrigation: React.FC = () => {
   };
 
   const forcePumpOnSimulation = async () => {
+    const runtimeMinutes = Math.max(1, Math.min(120, Math.round(Number(manualPumpRuntimeMinutes || 2))));
     await simulateVirtualTick(data.policy?.crop || 'Rice', {
       measuredMoisture: simulatedMoistureInput,
       forcePump: 'on',
       manualLiters: manualPumpLiters,
+      manualRuntimeMinutes: runtimeMinutes,
     });
   };
 
@@ -1270,10 +1278,10 @@ export const Irrigation: React.FC = () => {
                 data-testid="pump-sim-liters-input"
                 type="number"
                 min={1}
-                max={Number(data.policy?.maxVolume || 150)}
+                max={Number(data.policy?.maxVolume || 150) * 10}
                 value={manualPumpLiters}
                 onChange={(e) => {
-                  const cap = Number(data.policy?.maxVolume || 150);
+                  const cap = Number(data.policy?.maxVolume || 150) * 10;
                   const next = Math.round(Number(e.target.value || 0));
                   setManualPumpLiters(Math.max(1, Math.min(cap, next)));
                 }}
@@ -1419,10 +1427,10 @@ export const Irrigation: React.FC = () => {
               data-testid="manual-water-amount-input"
               type="number"
               min={1}
-              max={Number(data.policy?.maxVolume || 150)}
+              max={Number(data.policy?.maxVolume || 150) * 10}
               value={manualPumpLiters}
               onChange={(e) => {
-                const cap = Number(data.policy?.maxVolume || 150);
+                const cap = Number(data.policy?.maxVolume || 150) * 10;
                 const next = Math.round(Number(e.target.value || 0));
                 setManualPumpLiters(Math.max(1, Math.min(cap, next)));
               }}
@@ -1430,10 +1438,26 @@ export const Irrigation: React.FC = () => {
             />
           </label>
 
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-center">
-            <p className="text-sm text-gray-600">{lang === 'bn' ? 'সর্বশেষ প্রয়োগ করা পরিমাণ' : 'Last Applied Amount'}</p>
-            <p data-testid="manual-water-last-amount" className="text-xl font-bold text-blue-600 mt-1">{data.amount}</p>
-          </div>
+          <label className="text-sm text-gray-700">
+            {lang === 'bn' ? 'চলার সময় (মিনিট)' : 'Runtime (Minutes)'}
+            <input
+              data-testid="manual-pump-runtime-input"
+              type="number"
+              min={1}
+              max={120}
+              value={manualPumpRuntimeMinutes}
+              onChange={(e) => {
+                const next = Math.round(Number(e.target.value || 0));
+                setManualPumpRuntimeMinutes(Math.max(1, Math.min(120, next)));
+              }}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+          </label>
+        </div>
+
+        <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-center mb-4">
+          <p className="text-sm text-gray-600">{lang === 'bn' ? 'সর্বশেষ প্রয়োগ করা পরিমাণ' : 'Last Applied Amount'}</p>
+          <p data-testid="manual-water-last-amount" className="text-xl font-bold text-blue-600 mt-1">{data.amount}</p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
