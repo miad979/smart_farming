@@ -20,6 +20,8 @@
     "preview": "node server/preview-server.cjs",
     "start:prod": "node server/check-production-env.cjs && node server/preview-server.cjs",
     "secret:auth": "node server/generate-auth-secret.cjs",
+    "demo:free": "node server/start-free-demo.cjs",
+    "demo:free:skip-build": "node server/start-free-demo.cjs --skip-build",
     "sync:sql": "node server/sync-sql-snapshot.cjs",
     "sync:postgres": "node server/sync-sql-snapshot.cjs",
     "start": "npm run dev",

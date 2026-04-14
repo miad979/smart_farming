@@ -11,6 +11,26 @@ Static hosting cannot run:
 
 This project should run with `server/preview-server.cjs` behind a Node host.
 
+## Free Option (No Billing)
+
+If billing is blocked for hosted runtimes, run a temporary public demo from your own machine:
+
+```bash
+npm run demo:free
+```
+
+This command:
+- builds the app
+- starts production runtime on local port 4180
+- opens a Cloudflare quick tunnel and prints a public URL
+
+Use `npm run demo:free:skip-build` for faster restarts.
+
+Limitations:
+- your computer must remain on
+- URL changes each restart
+- quick tunnels are not guaranteed for production uptime
+
 ## Files Added for Automation
 
 - `render.yaml` - Render Blueprint service definition

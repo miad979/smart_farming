@@ -21,6 +21,19 @@ npm run dev
 
 Open `http://localhost:5173`.
 
+## Free Public Demo (No Billing)
+
+You can run the full app (frontend + API + realtime) locally and expose it with a free Cloudflare quick tunnel.
+
+```bash
+npm run demo:free
+```
+
+Notes:
+- This starts production-mode runtime + tunnel in one command.
+- Keep the terminal open; stopping it stops the public URL.
+- For faster restart without rebuilding, use `npm run demo:free:skip-build`.
+
 ## Production Runtime Deployment (Render)
 
 This app needs a long-running Node runtime because it serves both the frontend and backend API (`/api/*`) from `server/preview-server.cjs`.

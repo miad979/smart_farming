@@ -205,6 +205,23 @@ This section records what happened first-to-last, what was modified, and how it 
     - /api/health (status 200)
     - /api/realtime/stream (status 200, text/event-stream)
 
+### Phase G: One-command free runtime+tunnel launcher
+- Date: 2026-04-14
+- Summary:
+  - added one-command launcher for full runtime + Cloudflare quick tunnel
+  - launcher auto-detects cloudflared, starts production runtime, prints public URL, and shuts down both processes on Ctrl+C
+  - added npm scripts and docs for repeatable no-billing demos
+- Key modified files:
+  - server/start-free-demo.cjs
+  - package.json
+  - README.md
+  - docs/RUNTIME_DEPLOYMENT_RENDER.md
+- Validation:
+  - command tested: `node server/start-free-demo.cjs --skip-build --port 4181`
+  - generated public tunnel URL successfully
+  - public `/api/health` returned status JSON
+  - public `/api/realtime/stream` returned `200` with `text/event-stream`
+
 ## 7) Detailed Test Results (Latest Recorded)
 
 Date: 2026-04-14
@@ -402,12 +419,14 @@ npm run test:ui
 npm run test:ui:mobile
 npm run test:load
 npm run secret:auth
+npm run demo:free
+npm run demo:free:skip-build
 node server/check-production-env.cjs
 ```
 
 ---
 
-Document version: 2.1
+Document version: 2.2
 Status: Active and maintained
 Last updated: 2026-04-14
 Owner: Engineering / QA
