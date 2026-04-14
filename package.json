@@ -18,6 +18,8 @@
     "repo:bootstrap": "node server/bootstrap-github-repo.cjs",
     "protect:ui-smoke": "node server/apply-branch-protection.cjs",
     "preview": "node server/preview-server.cjs",
+    "start:prod": "node server/check-production-env.cjs && node server/preview-server.cjs",
+    "secret:auth": "node server/generate-auth-secret.cjs",
     "sync:sql": "node server/sync-sql-snapshot.cjs",
     "sync:postgres": "node server/sync-sql-snapshot.cjs",
     "start": "npm run dev",
@@ -133,10 +135,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/smart-farming-system"
+    "url": "https://github.com/miad979/smart_farming"
   },
   "bugs": {
-    "url": "https://github.com/your-org/smart-farming-system/issues"
+    "url": "https://github.com/miad979/smart_farming/issues"
   },
   "homepage": "https://smartfarming.com.bd"
 }

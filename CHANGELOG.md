@@ -389,7 +389,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and th
 ## Support
 
 - 📧 Email: support@smartfarming.bd
-- 💬 GitHub Issues: [Report bugs](https://github.com/your-org/smart-farming/issues)
+- 💬 GitHub Issues: [Report bugs](https://github.com/miad979/smart_farming/issues)
 - 📚 Documentation: [Read the docs](/docs)
 
 ---
@@ -403,7 +403,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and th
 
 ---
 
-**[Unreleased]:** https://github.com/your-org/smart-farming/compare/v1.0.0...HEAD  
-**[1.0.0]:** https://github.com/your-org/smart-farming/releases/tag/v1.0.0  
-**[0.9.0]:** https://github.com/your-org/smart-farming/releases/tag/v0.9.0  
-**[0.5.0]:** https://github.com/your-org/smart-farming/releases/tag/v0.5.0
+**[Unreleased]:** https://github.com/miad979/smart_farming/compare/v1.0.0...HEAD  
+**[1.0.0]:** https://github.com/miad979/smart_farming/releases/tag/v1.0.0  
+**[0.9.0]:** https://github.com/miad979/smart_farming/releases/tag/v0.9.0  
+**[0.5.0]:** https://github.com/miad979/smart_farming/releases/tag/v0.5.0

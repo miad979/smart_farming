@@ -1,0 +1,52 @@
+services:
+  - type: web
+    name: smart-farming-runtime
+    runtime: node
+    plan: starter
+    autoDeploy: true
+    healthCheckPath: /api/health
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start:prod
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AUTH_TOKEN_SECRET
+        generateValue: true
+      - key: FORCE_SECURE_COOKIES
+        value: "true"
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://smart-farming-runtime.onrender.com
+      - key: DATABASE_URL
+        sync: false
+      - key: SQL_SSL
+        value: require
+      - key: PLANT_ID_API_KEY
+        sync: false
+      - key: PLANT_ID_HEALTH_ENDPOINT
+        value: https://api.plant.id/v2/health_assessment
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: meta-llama/llama-3.3-8b-instruct:free
+      - key: OPENROUTER_SITE_URL
+        value: https://smart-farming-runtime.onrender.com
+      - key: OPENROUTER_APP_NAME
+        value: Smart Farming
+      - key: EDGE_TTS_ENABLED
+        value: "true"
+      - key: EDGE_TTS_BN_VOICE
+        value: bn-BD-PradeepNeural
+      - key: EDGE_TTS_EN_VOICE
+        value: en-US-AriaNeural
+      - key: EDGE_TTS_BN_RATE
+        value: -10%
+      - key: EDGE_TTS_EN_RATE
+        value: default

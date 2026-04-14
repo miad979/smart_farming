@@ -21,6 +21,28 @@ npm run dev
 
 Open `http://localhost:5173`.
 
+## Production Runtime Deployment (Render)
+
+This app needs a long-running Node runtime because it serves both the frontend and backend API (`/api/*`) from `server/preview-server.cjs`.
+
+1. Create runtime secrets:
+
+```bash
+npm run secret:auth
+```
+
+2. Use the production env template:
+
+```bash
+cp .env.production.example .env.production
+```
+
+3. Deploy as a Render Blueprint using `render.yaml`.
+4. Set required secrets in Render (`AUTH_TOKEN_SECRET`, `CORS_ALLOWED_ORIGINS`, and any AI provider keys you use).
+5. Optional: set GitHub Actions repository variable `RENDER_DEPLOY_HOOK_URL` to auto-deploy from `main` via `.github/workflows/deploy-render.yml`.
+
+Detailed steps are in `docs/RUNTIME_DEPLOYMENT_RENDER.md`.
+
 ## PostgreSQL Mode (Optional)
 
 You can run the same backend with PostgreSQL as persistent storage using a JSON snapshot table.

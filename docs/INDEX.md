@@ -10,7 +10,7 @@
 
 This comprehensive documentation package includes everything needed to understand, develop, deploy, and maintain the Smart Farming Management System.
 
-**Total Documents:** 8 core documents + README  
+**Total Documents:** 9 core documents + README  
 **Total Pages:** 200+ pages of detailed documentation  
 **Status:** Complete and Production-Ready
 
@@ -263,6 +263,20 @@ This comprehensive documentation package includes everything needed to understan
 
 **📍 Location:** `/docs/DEPLOYMENT.md`  
 **Pages:** ~25 pages
+
+---
+
+### 9. Runtime Deployment (Render)
+**Purpose:** End-to-end deployment path for fullstack runtime (frontend + local API + realtime)  
+**Audience:** DevOps engineers, maintainers  
+**Key Contents:**
+- Render Blueprint setup (`render.yaml`)
+- Required production secrets
+- Optional AI/provider keys
+- Health checks and post-deploy verification
+- Auto-deploy via GitHub deploy hook
+
+**📍 Location:** `/docs/RUNTIME_DEPLOYMENT_RENDER.md`
 
 ---
 

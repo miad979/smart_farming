@@ -1,0 +1,55 @@
+name: Deploy Runtime (Render)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy-render:
+    name: Deploy render runtime
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve deploy hook variable
+        id: resolve-hook
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          API_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/variables/RENDER_DEPLOY_HOOK_URL"
+          RESPONSE=$(curl --silent --show-error --fail \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${API_URL}" || true)
+
+          if [ -z "$RESPONSE" ]; then
+            echo "hook_url=" >> "$GITHUB_OUTPUT"
+            echo "RENDER_DEPLOY_HOOK_URL variable is not configured."
+            exit 0
+          fi
+
+          HOOK_URL=$(printf '%s' "$RESPONSE" | node -e "const fs=require('fs');const input=fs.readFileSync(0,'utf8');try{const parsed=JSON.parse(input);process.stdout.write(String(parsed.value||''));}catch{process.stdout.write('');}")
+
+          if [ -z "$HOOK_URL" ]; then
+            echo "hook_url=" >> "$GITHUB_OUTPUT"
+            echo "RENDER_DEPLOY_HOOK_URL variable is empty."
+            exit 0
+          fi
+
+          echo "hook_url=$HOOK_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger Render deployment
+        if: steps.resolve-hook.outputs.hook_url != ''
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ steps.resolve-hook.outputs.hook_url }}
+        run: |
+          echo "Triggering Render deployment..."
+          curl --fail --silent --show-error --request POST "$RENDER_DEPLOY_HOOK_URL"
+
+      - name: Skip when hook is missing
+        if: steps.resolve-hook.outputs.hook_url == ''
+        run: echo "Render deployment skipped. Set repository variable RENDER_DEPLOY_HOOK_URL to enable auto deploy."

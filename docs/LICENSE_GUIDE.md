@@ -232,7 +232,7 @@ Licensed under the MIT License
 **For websites/apps:**
 ```
 Built with Smart Farming Management System
-https://github.com/your-org/smart-farming
+https://github.com/miad979/smart_farming
 Licensed under MIT License
 ```
 
@@ -241,7 +241,7 @@ Licensed under MIT License
 This project uses the Smart Farming Management System,
 an open-source agricultural platform for Bangladeshi farmers.
 
-Source: https://github.com/your-org/smart-farming
+Source: https://github.com/miad979/smart_farming
 License: MIT License
 ```
 

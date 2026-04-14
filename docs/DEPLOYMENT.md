@@ -2,6 +2,17 @@
 
 > Local Mode Override (April 2026): Default deployment target is local API + local storage. Supabase deployment sections are legacy/optional.
 
+## Runtime Host Path (Current)
+
+The current production path is a Node runtime host (not static hosting) so API routes, auth, and realtime remain active.
+
+- Blueprint file: `render.yaml`
+- Runtime server: `server/preview-server.cjs`
+- Health endpoint: `/api/health`
+- Full runbook: `docs/RUNTIME_DEPLOYMENT_RENDER.md`
+
+If you deploy from GitHub, set repository variable `RENDER_DEPLOY_HOOK_URL` to enable `.github/workflows/deploy-render.yml`.
+
 ## Pre-Deployment Checklist
 
 ### Code Quality

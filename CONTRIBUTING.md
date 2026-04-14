@@ -27,7 +27,7 @@ This project and everyone participating in it is governed by our [Code of Conduc
 
 ### 🐛 Reporting Bugs
 
-Before creating bug reports, please check the [existing issues](https://github.com/your-org/smart-farming/issues) as you might find that the problem has already been reported.
+Before creating bug reports, please check the [existing issues](https://github.com/miad979/smart_farming/issues) as you might find that the problem has already been reported.
 
 **When submitting a bug report, include:**
 
@@ -665,8 +665,8 @@ Documentation is just as important as code!
 ### Resources
 
 - 📚 [Documentation](/docs)
-- 💬 [GitHub Discussions](https://github.com/your-org/smart-farming/discussions)
-- 🐛 [Issue Tracker](https://github.com/your-org/smart-farming/issues)
+- 💬 [GitHub Discussions](https://github.com/miad979/smart_farming/discussions)
+- 🐛 [Issue Tracker](https://github.com/miad979/smart_farming/issues)
 
 ### Communication Channels
 
@@ -678,8 +678,8 @@ Documentation is just as important as code!
 
 Look for issues labeled `good first issue` or `help wanted`:
 
-- [Good First Issues](https://github.com/your-org/smart-farming/labels/good%20first%20issue)
-- [Help Wanted](https://github.com/your-org/smart-farming/labels/help%20wanted)
+- [Good First Issues](https://github.com/miad979/smart_farming/labels/good%20first%20issue)
+- [Help Wanted](https://github.com/miad979/smart_farming/labels/help%20wanted)
 
 ---
 
@@ -704,9 +704,9 @@ By contributing, you agree that your contributions will be licensed under the sa
 
 Don't hesitate to ask! We're here to help:
 
-- Open a [GitHub Discussion](https://github.com/your-org/smart-farming/discussions)
+- Open a [GitHub Discussion](https://github.com/miad979/smart_farming/discussions)
 - Email: contribute@smartfarming.bd
-- Check existing [Issues](https://github.com/your-org/smart-farming/issues)
+- Check existing [Issues](https://github.com/miad979/smart_farming/issues)
 
 ---
 

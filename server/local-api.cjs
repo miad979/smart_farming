@@ -64,8 +64,13 @@ const ALLOWED_UPLOAD_MIME_TYPES = new Set(['application/pdf', 'image/jpeg', 'ima
 const MAX_JSON_BODY_BYTES = Number(process.env.MAX_JSON_BODY_BYTES || 1024 * 1024)
 const AUTH_TOKEN_TTL_MS = Math.max(5 * 60 * 1000, Number(process.env.AUTH_TOKEN_TTL_MS || 12 * 60 * 60 * 1000))
 const LEGACY_DEMO_TOKEN_FALLBACK = String(process.env.LEGACY_DEMO_TOKEN_FALLBACK || 'false').toLowerCase() === 'true'
-const AUTH_TOKEN_SECRET = (process.env.AUTH_TOKEN_SECRET || '').trim()
+const PROVIDED_AUTH_TOKEN_SECRET = (process.env.AUTH_TOKEN_SECRET || '').trim()
+const IS_PRODUCTION = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
+const AUTH_TOKEN_SECRET = PROVIDED_AUTH_TOKEN_SECRET
   || crypto.createHash('sha256').update(`smart-farming-local:${DB_PATH}`).digest('hex')
+if (IS_PRODUCTION && !PROVIDED_AUTH_TOKEN_SECRET) {
+  throw new Error('AUTH_TOKEN_SECRET is required when NODE_ENV=production')
+}
 const AUTH_COOKIE_NAME = 'sf_access_token'
 const CSRF_COOKIE_NAME = 'sf_csrf'
 const CSRF_HEADER_NAME = 'x-csrf-token'
