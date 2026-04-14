@@ -212,7 +212,7 @@ export const DoctorDashboard: React.FC = () => {
 
       {/* Consultations Tabs */}
       <Tabs value={selectedTab} onValueChange={setSelectedTab}>
-        <TabsList className="grid w-full grid-cols-3 md:w-auto">
+        <TabsList className="grid h-auto w-full grid-cols-1 gap-2 sm:grid-cols-3">
           <TabsTrigger value="pending" className="relative">
             {t('pending', lang)}
             {pendingConsultations.length > 0 && (
@@ -324,18 +324,19 @@ export const DoctorDashboard: React.FC = () => {
                         onChange={(e) => setResponseText({ ...responseText, [consultation.id]: e.target.value })}
                         className="min-h-24 mb-3"
                       />
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2">
                         <Button 
-                          className="flex-1"
+                          className="flex-1 min-w-[120px]"
                           onClick={() => handleRespond(consultation.id)}
                           disabled={!responseText[consultation.id]}
                         >
                           <Send className="w-4 h-4 mr-2" />
                           {t('respond', lang)}
                         </Button>
-                        <Button variant="outline">
+                        <Button variant="outline" className="flex-1 min-w-[120px]">
                           <Eye className="w-4 h-4 md:mr-2" />
                           <span className="hidden md:inline">{t('viewCase', lang)}</span>
+                          <span className="md:hidden">{t('view', lang) || 'View'}</span>
                         </Button>
                       </div>
                     </div>
@@ -388,12 +389,12 @@ export const DoctorDashboard: React.FC = () => {
                       </p>
                     </div>
 
-                    <div className="flex gap-2">
-                      <Button variant="outline" className="flex-1">
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="outline" className="flex-1 min-w-[120px]">
                         <FileText className="w-4 h-4 mr-2" />
                         {t('addAdvice', lang)}
                       </Button>
-                      <Button variant="outline">
+                      <Button variant="outline" className="flex-1 min-w-[120px]">
                         {lang === 'bn' ? 'সম্পন্ন চিহ্নিত করুন' : 'Mark Complete'}
                       </Button>
                     </div>

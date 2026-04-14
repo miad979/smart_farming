@@ -396,4 +396,37 @@ test.describe.serial('Role-based UI smoke checks', () => {
 
     await context.close();
   });
+
+  test('doctor mobile consultation flow remains usable @mobile', async ({ browser }) => {
+    const context = await newRoleContext(browser, doctorSession, {
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+    });
+    const page = await context.newPage();
+
+    await page.goto(`${APP_BASE_URL}/doctor`, { waitUntil: 'domcontentloaded' });
+    await expect(page).toHaveURL(/\/doctor(?:\?.*)?$/);
+    await expect(page.getByRole('heading', { name: 'Doctor Panel', exact: true })).toBeVisible();
+
+    // Verify consultation tabs are visible and responsive (single column on mobile)
+    const tabsList = page.getByRole('tablist');
+    await expect(tabsList).toBeVisible();
+    const pendingTab = page.getByRole('tab', { name: /pending/i });
+    const inProgressTab = page.getByRole('tab', { name: /in progress|inProgress/i });
+    await expect(pendingTab).toBeVisible();
+    await expect(inProgressTab).toBeVisible();
+
+    // Switch to in-progress tab
+    await inProgressTab.click();
+    
+    // Verify tab content is visible after switching
+    await expect(page.locator('text=/No consultations in progress|Add Advice/i').first()).toBeVisible({ timeout: 5000 });
+
+    // Switch back to pending tab
+    await pendingTab.click();
+    await expect(page.locator('text=/No pending consultations|Your Advice/i').first()).toBeVisible({ timeout: 5000 });
+
+    await context.close();
+  });
 });
