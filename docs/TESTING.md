@@ -222,6 +222,35 @@ This section records what happened first-to-last, what was modified, and how it 
   - public `/api/health` returned status JSON
   - public `/api/realtime/stream` returned `200` with `text/event-stream`
 
+### Phase H: Comprehensive taxonomy execution (core levels + categories + methods)
+- Date: 2026-04-14
+- Commit: N/A (execution-only verification run)
+- Summary:
+  - executed full available automated matrix mapped to requested testing taxonomy
+  - added explicit black-box checks via public tunnel URL
+  - added accessibility smoke heuristics via Playwright browser probe
+  - validated dependency security via npm audit
+- Commands executed:
+  - `npm run build`
+  - `npm run test:security`
+  - `npm run test:actions`
+  - `npm run test:load`
+  - `npm run test:ui`
+  - `npm run test:ui:mobile`
+  - `npm audit --audit-level=high`
+  - black-box live checks on `https://files-maintains-persian-cnet.trycloudflare.com`
+  - accessibility smoke probe using Playwright (`A11Y_SMOKE`)
+- Results:
+  - build: pass
+  - security integration: pass
+  - action/integration workflow: pass
+  - load/performance: pass (unexpected error rate 0.00%)
+  - UI smoke: pass (5/5)
+  - mobile UI smoke: pass (1/1)
+  - dependency security audit: pass (0 high vulnerabilities)
+  - live black-box endpoints: pass (`/`, `/api/health`, `/api/realtime/stream`)
+  - accessibility smoke output: `{"title":"Smart Farming System","h1Count":3,"lang":"en"}`
+
 ## 7) Detailed Test Results (Latest Recorded)
 
 Date: 2026-04-14
@@ -283,6 +312,82 @@ Result:
 - `/` returned CSP and key security headers (`X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`)
 - `/api/health` returned 200 with JSON status payload
 - `/api/realtime/stream` returned 200 with `Content-Type: text/event-stream`
+
+### Integration Workflow Test
+Command:
+```bash
+npm run test:actions
+```
+Result:
+- PASS
+- doctor verification state transitions, permission checks, and audit log assertions passed
+
+### Performance / Load Test
+Command:
+```bash
+npm run test:load
+```
+Result:
+- PASS
+- total requests: 1676
+- failed requests (unexpected): 0
+- throttled requests (429): 1003 (expected under hardening limits)
+- unexpected error rate: 0.00%
+- latency p95: 404.73ms
+
+### Dependency Security Audit
+Command:
+```bash
+npm audit --audit-level=high
+```
+Result:
+- PASS
+- reported vulnerabilities: 0
+
+### Black-Box Live Endpoint Check (Public Tunnel)
+Target:
+- `https://files-maintains-persian-cnet.trycloudflare.com`
+
+Result:
+- PASS
+- root path returned 200 with CSP and hardening headers
+- `/api/health` returned status JSON
+- `/api/realtime/stream` returned 200 and `text/event-stream`
+
+### Accessibility Smoke Heuristic
+Command:
+```bash
+node -e "...Playwright probe..."
+```
+Result:
+- PASS (smoke)
+- output: `A11Y_SMOKE={"title":"Smart Farming System","h1Count":3,"lang":"en"}`
+- note: this is a lightweight heuristic, not a full WCAG audit
+
+### Taxonomy Coverage Mapping
+
+- Core levels:
+  - Unit testing: not available as dedicated suite in repository (no standalone unit test files found)
+  - Integration testing: covered by `test:security` and `test:actions`
+  - System testing: covered by build + UI smoke + live endpoint checks
+  - Acceptance testing: approximated by role-based UI smoke; formal end-user UAT remains manual
+
+- Major categories:
+  - Functional: covered (API + role UI + workflow)
+  - Non-functional: covered (performance load, security audit/integration)
+  - Performance: covered (`test:load`)
+  - Security: covered (`test:security`, `npm audit`, hardened headers/cookies/rate limits active)
+  - Usability: requires human exploratory/UAT session (not fully automatable)
+  - Accessibility: partially covered by Playwright smoke heuristic; full axe/WCAG audit pending
+
+- Execution methods:
+  - Automated testing: executed extensively (all listed automated commands above)
+  - Manual testing: limited in this run; full manual/UAT requires stakeholder-driven scenarios
+
+- Structural approaches:
+  - Black-box: public tunnel endpoint checks and UI smoke behavior checks
+  - White-box: internal workflow scripts validating lockout, CSRF, audit log internals
+  - Grey-box: role/action workflow tests combining API behavior with domain knowledge
 
 ## 8) What Was Modified to Improve Testability
 
@@ -426,7 +531,7 @@ node server/check-production-env.cjs
 
 ---
 
-Document version: 2.2
+Document version: 2.3
 Status: Active and maintained
 Last updated: 2026-04-14
 Owner: Engineering / QA
