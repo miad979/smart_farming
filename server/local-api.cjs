@@ -786,14 +786,53 @@ function appendSensorHistory(schedule, { measuredMoisture, moisture, action, app
   return history.slice(-20)
 }
 
-function runAutoIrrigationDecision(schedule, measuredMoisture) {
+function normalizeForcedPumpAction(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'on') return 'on'
+  if (normalized === 'off') return 'off'
+  return null
+}
+
+function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
   const threshold = Number(schedule?.policy?.threshold || 60)
   const maxVolume = Number(schedule?.policy?.maxVolume || 120)
+  const forcePump = normalizeForcedPumpAction(options?.forcePump)
+  const requestedLiters = Number(options?.manualLiters || 0)
+  const safeRequestedLiters = Number.isFinite(requestedLiters) ? requestedLiters : 0
   const nextSchedule = { ...schedule, moisture: measuredMoisture, alerts: [] }
   let action = 'idle'
   let appliedLiters = 0
+  let reason = 'Sensor tick processed'
 
-  if (nextSchedule.autoMode && measuredMoisture < threshold) {
+  if (forcePump === 'on') {
+    appliedLiters = Math.min(maxVolume, Math.max(10, safeRequestedLiters || 45))
+    const moistureLift = Math.max(6, Math.round(appliedLiters * 0.35))
+    nextSchedule.moisture = Math.min(95, measuredMoisture + moistureLift)
+    nextSchedule.amount = `${appliedLiters}L`
+    nextSchedule.nextWatering = 'Manual simulation cycle complete'
+    nextSchedule.nextWatering_bn = 'ম্যানুয়াল সিমুলেশন চক্র সম্পন্ন'
+    nextSchedule.alerts = [
+      {
+        message: 'Virtual pump forced ON for simulation.',
+        message_bn: 'সিমুলেশনের জন্য ভার্চুয়াল পাম্প চালু করা হয়েছে।',
+      },
+    ]
+    action = 'watering'
+    reason = 'Virtual pump forced ON for simulation'
+    nextSchedule.usage = upsertIrrigationUsageForToday(nextSchedule, appliedLiters)
+  } else if (forcePump === 'off') {
+    nextSchedule.amount = '0L'
+    nextSchedule.nextWatering = 'Pump forced OFF for simulation'
+    nextSchedule.nextWatering_bn = 'সিমুলেশনের জন্য পাম্প বন্ধ রাখা হয়েছে'
+    nextSchedule.alerts = [
+      {
+        message: 'Virtual pump forced OFF for simulation.',
+        message_bn: 'সিমুলেশনের জন্য ভার্চুয়াল পাম্প বন্ধ রাখা হয়েছে।',
+      },
+    ]
+    action = 'idle'
+    reason = 'Virtual pump forced OFF for simulation'
+  } else if (nextSchedule.autoMode && measuredMoisture < threshold) {
     const deficit = threshold - measuredMoisture
     appliedLiters = Math.min(maxVolume, Math.max(20, Math.round(deficit * 3.2)))
     nextSchedule.moisture = Math.min(95, measuredMoisture + Math.max(8, Math.round(deficit * 0.9)))
@@ -807,15 +846,17 @@ function runAutoIrrigationDecision(schedule, measuredMoisture) {
       },
     ]
     action = 'watering'
+    reason = 'Automatic irrigation applied from virtual sensor'
     nextSchedule.usage = upsertIrrigationUsageForToday(nextSchedule, appliedLiters)
   } else {
     nextSchedule.amount = nextSchedule.amount || '0L'
     nextSchedule.nextWatering = nextSchedule.nextWatering || 'Monitor in 2 hours'
     nextSchedule.nextWatering_bn = nextSchedule.nextWatering_bn || '২ ঘণ্টা পরে পুনরায় দেখুন'
+    reason = 'No watering needed based on moisture threshold'
   }
 
   nextSchedule.updatedAt = nowIso()
-  return { schedule: nextSchedule, action, appliedLiters }
+  return { schedule: nextSchedule, action, appliedLiters, reason }
 }
 
 function send(res, status, payload) {
@@ -4245,8 +4286,17 @@ function createLocalApiMiddleware() {
 
         const existingSchedule = db.irrigation[authId] || createDefaultIrrigationSchedule(authId, cropProfile.crop)
         const currentMoisture = Number(existingSchedule.moisture ?? device?.telemetry?.soilMoisture ?? 68)
+        const measuredInput = Number(body?.measuredMoisture)
+        const hasMeasuredInput = Number.isFinite(measuredInput)
         const noise = Math.round((Math.random() * 12) - 8)
-        const measuredMoisture = Math.max(20, Math.min(95, currentMoisture + noise))
+        const measuredMoisture = hasMeasuredInput
+          ? Math.max(20, Math.min(95, Math.round(measuredInput)))
+          : Math.max(20, Math.min(95, currentMoisture + noise))
+        const forcePump = normalizeForcedPumpAction(body?.forcePump)
+        const manualLitersInput = Number(body?.manualLiters)
+        const manualLiters = Number.isFinite(manualLitersInput)
+          ? Math.max(1, Math.round(manualLitersInput))
+          : undefined
 
         const scheduleWithPolicy = {
           ...existingSchedule,
@@ -4261,7 +4311,11 @@ function createLocalApiMiddleware() {
           deviceId,
         }
 
-        const { schedule, action, appliedLiters } = runAutoIrrigationDecision(scheduleWithPolicy, measuredMoisture)
+        const { schedule, action, appliedLiters, reason } = runAutoIrrigationDecision(
+          scheduleWithPolicy,
+          measuredMoisture,
+          { forcePump, manualLiters },
+        )
         schedule.sensorHistory = appendSensorHistory(schedule, {
           measuredMoisture,
           moisture: schedule.moisture,
@@ -4293,7 +4347,12 @@ function createLocalApiMiddleware() {
           schedule,
           action,
           appliedLiters,
-          message: action === 'watering' ? 'Automatic irrigation applied from virtual sensor' : 'Sensor tick processed',
+          simulatedInput: {
+            measuredMoisture,
+            forcePump: forcePump || 'auto',
+            manualLiters: typeof manualLiters === 'number' ? manualLiters : null,
+          },
+          message: reason,
         })
       }
 

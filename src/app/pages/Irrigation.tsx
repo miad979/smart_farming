@@ -96,6 +96,12 @@ type VirtualDevice = {
   lastSync?: string;
 };
 
+type PumpSimulationResult = {
+  action: string;
+  message: string;
+  appliedLiters: number;
+};
+
 const CROP_PROFILES: Record<string, { crop_bn: string; threshold: number; maxVolume: number }> = {
   Rice: { crop_bn: 'ধান', threshold: 65, maxVolume: 150 },
   Wheat: { crop_bn: 'গম', threshold: 55, maxVolume: 110 },
@@ -115,6 +121,9 @@ export const Irrigation: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [simulating, setSimulating] = useState(false);
   const [autoSimulation, setAutoSimulation] = useState(true);
+  const [simulatedMoistureInput, setSimulatedMoistureInput] = useState(58);
+  const [manualPumpLiters, setManualPumpLiters] = useState(45);
+  const [lastPumpSimulation, setLastPumpSimulation] = useState<PumpSimulationResult | null>(null);
   const [yieldAdvice, setYieldAdvice] = useState<YieldAdvice | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [virtualDevice, setVirtualDevice] = useState<VirtualDevice | null>(null);
@@ -140,11 +149,16 @@ export const Irrigation: React.FC = () => {
     if (setup?.schedule) {
       setData(setup.schedule);
       setAutoMode(!!setup.schedule.autoMode);
+      setSimulatedMoistureInput(Math.max(20, Math.min(95, Number(setup.schedule.moisture || 58))));
+      setManualPumpLiters(Math.max(10, Math.min(Number(setup.schedule?.policy?.maxVolume || 150), 45)));
     }
     return setup?.device || null;
   };
 
-  const simulateVirtualTick = async (cropName?: string) => {
+  const simulateVirtualTick = async (
+    cropName?: string,
+    options?: { measuredMoisture?: number; forcePump?: 'on' | 'off'; manualLiters?: number },
+  ) => {
     if (state.userMode === 'guest' || !state.accessToken) return;
     let device = virtualDevice;
     if (!device?.id) {
@@ -156,12 +170,24 @@ export const Irrigation: React.FC = () => {
     try {
       const result = await simulateVirtualIrrigationTick(state.accessToken, device.id, {
         crop: cropName || data.policy.crop,
+        ...(typeof options?.measuredMoisture === 'number'
+          ? { measuredMoisture: Math.max(20, Math.min(95, Math.round(options.measuredMoisture))) }
+          : {}),
+        ...(options?.forcePump ? { forcePump: options.forcePump } : {}),
+        ...(typeof options?.manualLiters === 'number'
+          ? { manualLiters: Math.max(1, Math.round(options.manualLiters)) }
+          : {}),
       });
       if (result?.device) setVirtualDevice(result.device);
       if (result?.schedule) {
         setData(result.schedule);
         setAutoMode(!!result.schedule.autoMode);
       }
+      setLastPumpSimulation({
+        action: result?.action || 'idle',
+        message: result?.message || '',
+        appliedLiters: Number(result?.appliedLiters || 0),
+      });
       setLastUpdated(new Date());
     } catch (error) {
       console.error('Failed to simulate virtual device tick:', error);
@@ -245,6 +271,8 @@ export const Irrigation: React.FC = () => {
       const { schedule } = await getIrrigationSchedule(state.accessToken, state.user.id);
       setData(schedule);
       setAutoMode(!!schedule.autoMode);
+      setSimulatedMoistureInput(Math.max(20, Math.min(95, Number(schedule.moisture || 58))));
+      setManualPumpLiters(Math.max(10, Math.min(Number(schedule?.policy?.maxVolume || 150), 45)));
       await refreshOrSetupVirtualDevice(schedule?.policy?.crop || 'Rice');
       setLastUpdated(new Date());
 
@@ -366,6 +394,27 @@ export const Irrigation: React.FC = () => {
     });
     await refreshOrSetupVirtualDevice(nextCrop);
     await simulateVirtualTick(nextCrop);
+  };
+
+  const runAutoDecisionSimulation = async () => {
+    await simulateVirtualTick(data.policy?.crop || 'Rice', {
+      measuredMoisture: simulatedMoistureInput,
+    });
+  };
+
+  const forcePumpOnSimulation = async () => {
+    await simulateVirtualTick(data.policy?.crop || 'Rice', {
+      measuredMoisture: simulatedMoistureInput,
+      forcePump: 'on',
+      manualLiters: manualPumpLiters,
+    });
+  };
+
+  const forcePumpOffSimulation = async () => {
+    await simulateVirtualTick(data.policy?.crop || 'Rice', {
+      measuredMoisture: simulatedMoistureInput,
+      forcePump: 'off',
+    });
   };
 
   if (loading) {
@@ -503,7 +552,7 @@ export const Irrigation: React.FC = () => {
             className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-white font-semibold hover:bg-indigo-700 disabled:opacity-60"
           >
             {simulating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
-            {lang === 'bn' ? 'সেন্সর টিক চালান' : 'Run Sensor Tick'}
+            {lang === 'bn' ? 'র‍্যান্ডম সেন্সর টিক' : 'Run Random Sensor Tick'}
           </button>
           <button
             type="button"
@@ -519,6 +568,95 @@ export const Irrigation: React.FC = () => {
               ? (lang === 'bn' ? 'অটো সিমুলেশন চালু' : 'Auto Simulation ON')
               : (lang === 'bn' ? 'অটো সিমুলেশন বন্ধ' : 'Auto Simulation OFF')}
           </button>
+        </div>
+
+        <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50/30 p-4">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3">
+            <p className="text-sm font-semibold text-emerald-900">
+              {lang === 'bn' ? 'ভার্চুয়াল পাম্প সিমুলেটর' : 'Virtual Pump Simulator'}
+            </p>
+            <span
+              className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded-full border ${
+                virtualDevice?.actuatorState === 'watering'
+                  ? 'bg-orange-100 text-orange-700 border-orange-300'
+                  : 'bg-emerald-100 text-emerald-700 border-emerald-300'
+              }`}
+            >
+              <Power className="w-3 h-3" />
+              {virtualDevice?.actuatorState === 'watering'
+                ? (lang === 'bn' ? 'পাম্প চালু' : 'Pump ON')
+                : (lang === 'bn' ? 'পাম্প বন্ধ' : 'Pump OFF')}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <label className="text-xs text-gray-700">
+              {lang === 'bn' ? 'সিমুলেটেড আর্দ্রতা (%)' : 'Simulated Moisture (%)'}
+              <input
+                data-testid="pump-sim-moisture-input"
+                type="number"
+                min={20}
+                max={95}
+                value={simulatedMoistureInput}
+                onChange={(e) => setSimulatedMoistureInput(Math.max(20, Math.min(95, Number(e.target.value || 0))))}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+            </label>
+
+            <label className="text-xs text-gray-700">
+              {lang === 'bn' ? 'পাম্পের পানি (লিটার)' : 'Pump Water (Liters)'}
+              <input
+                data-testid="pump-sim-liters-input"
+                type="number"
+                min={10}
+                max={Number(data.policy?.maxVolume || 150)}
+                value={manualPumpLiters}
+                onChange={(e) => {
+                  const cap = Number(data.policy?.maxVolume || 150);
+                  const next = Math.round(Number(e.target.value || 0));
+                  setManualPumpLiters(Math.max(10, Math.min(cap, next)));
+                }}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              data-testid="pump-sim-auto-btn"
+              onClick={() => void runAutoDecisionSimulation()}
+              disabled={simulating || saving}
+              className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+            >
+              {lang === 'bn' ? 'অটো সিদ্ধান্ত চালান' : 'Run Auto Decision'}
+            </button>
+            <button
+              type="button"
+              data-testid="pump-sim-force-on-btn"
+              onClick={() => void forcePumpOnSimulation()}
+              disabled={simulating || saving}
+              className="rounded-lg bg-orange-600 px-3 py-2 text-xs font-semibold text-white hover:bg-orange-700 disabled:opacity-60"
+            >
+              {lang === 'bn' ? 'পাম্প চালু (টেস্ট)' : 'Force Pump ON (Test)'}
+            </button>
+            <button
+              type="button"
+              data-testid="pump-sim-force-off-btn"
+              onClick={() => void forcePumpOffSimulation()}
+              disabled={simulating || saving}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            >
+              {lang === 'bn' ? 'পাম্প বন্ধ (টেস্ট)' : 'Force Pump OFF (Test)'}
+            </button>
+          </div>
+
+          {lastPumpSimulation?.message && (
+            <p className="mt-3 text-xs text-emerald-900">
+              {lang === 'bn' ? 'সর্বশেষ ফলাফল' : 'Latest Result'}: {lastPumpSimulation.message}
+              {lastPumpSimulation.appliedLiters > 0 ? ` (${lastPumpSimulation.appliedLiters}L)` : ''}
+            </p>
+          )}
         </div>
 
         <div className="mt-5 rounded-xl border border-indigo-100 bg-indigo-50/30 p-4">

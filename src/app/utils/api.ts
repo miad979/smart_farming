@@ -847,7 +847,12 @@ export async function setupVirtualIrrigationDevice(token: string, data?: { crop?
 export async function simulateVirtualIrrigationTick(
   token: string,
   deviceId: string,
-  data?: { crop?: string },
+  data?: {
+    crop?: string;
+    measuredMoisture?: number;
+    forcePump?: 'on' | 'off';
+    manualLiters?: number;
+  },
 ) {
   const response = await fetch(`${API_BASE_URL}/devices/${encodeURIComponent(deviceId)}/simulate`, {
     method: 'POST',

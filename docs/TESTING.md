@@ -415,6 +415,25 @@ Result:
   - Usability decision: PASS
   - Follow-up enhancement requested: virtual IoT water-pump simulation for irrigation automation testing
 
+### Phase J: Virtual irrigation pump simulator implementation
+- Date: 2026-04-15
+- Commit: pending
+- Summary:
+  - implemented dedicated virtual pump simulator controls in irrigation UI
+  - added deterministic simulation inputs (simulated moisture + manual liters)
+  - added explicit force pump ON/OFF testing mode in backend simulation route
+  - added dedicated UAT checklist steps for simulator verification
+- Key modified files:
+  - src/app/pages/Irrigation.tsx
+  - src/app/utils/api.ts
+  - server/local-api.cjs
+  - docs/TESTING.md
+- Validation:
+  - npm run build: pass
+  - npm run test:security: pass
+  - npm run test:ui: pass (5/5)
+  - no diagnostics errors in modified files
+
 ## 8) What Was Modified to Improve Testability
 
 ### Test infrastructure
@@ -451,6 +470,7 @@ Policy settings:
 - [ ] login and logout flow
 - [ ] disease detection upload and advisory
 - [ ] irrigation status and control flow
+- [ ] virtual pump simulator auto/force cycles
 - [ ] market prices and weather render correctly
 - [ ] role-gated pages enforce permissions
 
@@ -495,6 +515,13 @@ Run immediately after deployment:
 5. Logging and errors
 - [ ] no startup crash logs
 - [ ] no repeated 5xx bursts in logs
+
+6. Virtual Pump Simulator (Dedicated UAT)
+- [ ] set simulated moisture below threshold and click "Run Auto Decision" -> verify pump turns ON
+- [ ] click "Force Pump ON (Test)" with custom liters -> verify watering event and liters reflected
+- [ ] click "Force Pump OFF (Test)" -> verify pump state returns to OFF/idle
+- [ ] confirm latest result message updates after each simulator action
+- [ ] confirm sensor history shows new points for simulator cycles
 
 ## 12) Defects and Fix Log
 
@@ -557,7 +584,7 @@ node server/check-production-env.cjs
 
 ---
 
-Document version: 2.4
+Document version: 2.5
 Status: Active and maintained
-Last updated: 2026-04-14
+Last updated: 2026-04-15
 Owner: Engineering / QA
