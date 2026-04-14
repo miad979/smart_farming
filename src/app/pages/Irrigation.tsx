@@ -171,7 +171,7 @@ export const Irrigation: React.FC = () => {
       setData(setup.schedule);
       setAutoMode(!!setup.schedule.autoMode);
       setSimulatedMoistureInput(Math.max(20, Math.min(95, Number(setup.schedule.moisture || 58))));
-      setManualPumpLiters(Math.max(10, Math.min(Number(setup.schedule?.policy?.maxVolume || 150), 45)));
+      setManualPumpLiters(Math.max(1, Math.min(Number(setup.schedule?.policy?.maxVolume || 150), 45)));
     }
     return setup?.device || null;
   };
@@ -358,7 +358,7 @@ export const Irrigation: React.FC = () => {
       }
       setAutoMode(!!schedule.autoMode);
       setSimulatedMoistureInput(Math.max(20, Math.min(95, Number(schedule.moisture || 58))));
-      setManualPumpLiters(Math.max(10, Math.min(Number(schedule?.policy?.maxVolume || 150), 45)));
+      setManualPumpLiters(Math.max(1, Math.min(Number(schedule?.policy?.maxVolume || 150), 45)));
       await refreshOrSetupVirtualDevice(schedule?.policy?.crop || 'Rice');
       setLastUpdated(new Date());
 
@@ -483,12 +483,31 @@ export const Irrigation: React.FC = () => {
   };
 
   const waterNow = async () => {
-    const nextMoisture = Math.min(95, Number(data.moisture || 68) + 12);
-    await persistUpdates({
-      moisture: nextMoisture,
-      amount: data.amount || '45L',
-      nextWatering: 'Tomorrow 6 AM',
-      nextWatering_bn: 'আগামীকাল সকাল ৬টা',
+    const maxVolume = Math.max(1, Number(data.policy?.maxVolume || 150));
+    const manualLiters = Math.max(1, Math.min(maxVolume, Math.round(Number(manualPumpLiters || 45))));
+
+    if (state.userMode === 'guest' || !state.accessToken || !state.user.id) {
+      const nextMoisture = Math.min(95, Number(data.moisture || 68) + Math.max(4, Math.round(manualLiters * 0.35)));
+      setData((prev) => ({
+        ...prev,
+        moisture: nextMoisture,
+        amount: `${manualLiters}L`,
+        nextWatering: 'Tomorrow 6 AM',
+        nextWatering_bn: 'আগামীকাল সকাল ৬টা',
+      }));
+      setLastPumpSimulation({
+        action: 'watering',
+        message: lang === 'bn' ? 'ম্যানুয়াল ওয়াটারিং সফল' : 'Manual watering completed',
+        appliedLiters: manualLiters,
+      });
+      setLastUpdated(new Date());
+      return;
+    }
+
+    await simulateVirtualTick(data.policy?.crop || 'Rice', {
+      measuredMoisture: Number(data.moisture || 68),
+      forcePump: 'on',
+      manualLiters,
     });
   };
 
@@ -838,13 +857,13 @@ export const Irrigation: React.FC = () => {
               <input
                 data-testid="pump-sim-liters-input"
                 type="number"
-                min={10}
+                min={1}
                 max={Number(data.policy?.maxVolume || 150)}
                 value={manualPumpLiters}
                 onChange={(e) => {
                   const cap = Number(data.policy?.maxVolume || 150);
                   const next = Math.round(Number(e.target.value || 0));
-                  setManualPumpLiters(Math.max(10, Math.min(cap, next)));
+                  setManualPumpLiters(Math.max(1, Math.min(cap, next)));
                 }}
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
               />
@@ -981,19 +1000,45 @@ export const Irrigation: React.FC = () => {
       <div className="bg-white rounded-xl shadow-sm p-6 border-2 border-gray-100">
         <h3 className="font-bold text-lg mb-6">{lang === 'bn' ? 'ম্যানুয়াল নিয়ন্ত্রণ' : 'Manual Control'}</h3>
 
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+          <label className="text-sm text-gray-700">
+            {lang === 'bn' ? 'ম্যানুয়াল পানির পরিমাণ (লিটার)' : 'Manual Water Amount (Liters)'}
+            <input
+              data-testid="manual-water-amount-input"
+              type="number"
+              min={1}
+              max={Number(data.policy?.maxVolume || 150)}
+              value={manualPumpLiters}
+              onChange={(e) => {
+                const cap = Number(data.policy?.maxVolume || 150);
+                const next = Math.round(Number(e.target.value || 0));
+                setManualPumpLiters(Math.max(1, Math.min(cap, next)));
+              }}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+          </label>
+
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-center">
+            <p className="text-sm text-gray-600">{lang === 'bn' ? 'সর্বশেষ প্রয়োগ করা পরিমাণ' : 'Last Applied Amount'}</p>
+            <p data-testid="manual-water-last-amount" className="text-xl font-bold text-blue-600 mt-1">{data.amount}</p>
+          </div>
+        </div>
+
         <button
+          data-testid="manual-water-now-btn"
           onClick={waterNow}
-          disabled={saving}
+          disabled={saving || simulating}
           className="w-full flex items-center justify-center gap-3 px-8 py-5 bg-gradient-to-r from-blue-600 to-blue-700 text-white text-base font-bold rounded-xl hover:from-blue-700 hover:to-blue-800 hover:shadow-xl transform hover:scale-[1.02] transition-all disabled:opacity-70"
         >
-          {saving ? <Loader2 className="w-6 h-6 animate-spin" /> : <Play className="w-6 h-6" />}
+          {(saving || simulating) ? <Loader2 className="w-6 h-6 animate-spin" /> : <Play className="w-6 h-6" />}
           {t('waterNow', lang)}
         </button>
 
-        <div className="mt-4 p-4 bg-gray-50 rounded-lg text-center">
-          <p className="text-sm text-gray-600">{lang === 'bn' ? 'পরিমাণ' : 'Amount'}</p>
-          <p className="text-xl font-bold text-blue-600 mt-1">{data.amount}</p>
-        </div>
+        <p className="mt-3 text-xs text-gray-600 text-center">
+          {lang === 'bn'
+            ? `ওয়াটার নাউ বোতাম চাপলে ${manualPumpLiters}L ম্যানুয়াল পানির পরিমাণ প্রয়োগ হবে`
+            : `Pressing Water Now applies ${manualPumpLiters}L for manual watering`}
+        </p>
       </div>
 
       <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">

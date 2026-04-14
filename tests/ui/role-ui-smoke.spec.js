@@ -233,6 +233,10 @@ test.describe.serial('Role-based UI smoke checks', () => {
     await expect(page.getByTestId('pump-pipe-fill-overlay')).toBeVisible();
     await expect(page.getByTestId('alarm-trigger-label')).toBeVisible();
     await expect(page.getByTestId('device-helpline-call-btn')).toBeVisible();
+    await expect(page.getByTestId('manual-water-amount-input')).toBeVisible();
+    await page.getByTestId('manual-water-amount-input').fill('30');
+    await page.getByTestId('manual-water-now-btn').click();
+    await expect(page.getByTestId('manual-water-last-amount')).toContainText('30L', { timeout: 15000 });
     await page.getByRole('button', { name: 'Irrigation Policy' }).click();
     await expect(page.getByTestId('alarm-tick-threshold-select')).toBeVisible();
 
