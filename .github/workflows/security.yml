@@ -1,0 +1,51 @@
+name: Security CI
+
+on:
+  pull_request:
+  push:
+    branches: [ main, master ]
+  schedule:
+    - cron: '0 3 * * 1'
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Backend syntax check
+        run: node -c server/local-api.cjs
+
+      - name: Build
+        run: npm run build
+
+      - name: Automated security integration tests
+        env:
+          AUTH_TOKEN_SECRET: ${{ secrets.AUTH_TOKEN_SECRET }}
+        run: npm run test:security
+
+      - name: Dependency audit (high+)
+        run: npm audit --audit-level=high
+
+      - name: Upload audit report (always)
+        if: always()
+        run: npm audit --json > npm-audit-report.json || true
+
+      - name: Store audit artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-report
+          path: npm-audit-report.json

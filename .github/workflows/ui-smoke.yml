@@ -1,0 +1,48 @@
+name: UI Smoke CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  merge_group:
+  workflow_dispatch:
+
+jobs:
+  ui-smoke:
+    name: required-ui-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run UI smoke tests
+        env:
+          AUTH_TOKEN_SECRET: ci_ui_smoke_secret_2026
+          UI_PORT: 5176
+        run: npm run test:ui
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
