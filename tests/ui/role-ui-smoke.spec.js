@@ -241,6 +241,7 @@ test.describe.serial('Role-based UI smoke checks', () => {
     await expect(page.getByTestId('pump-pipe-fill-overlay')).toBeVisible();
     await expect(page.getByTestId('pump-water-given-live')).toBeVisible();
     await expect(page.getByTestId('pump-water-given-total')).toBeVisible();
+    await expect(page.getByTestId('pump-watering-logic')).toBeVisible();
     await expect(page.getByTestId('alarm-trigger-label')).toBeVisible();
     await expect(page.getByTestId('device-helpline-call-btn')).toBeVisible();
     await expect(page.getByTestId('manual-water-amount-input')).toBeVisible();
@@ -252,6 +253,8 @@ test.describe.serial('Role-based UI smoke checks', () => {
     await expect(page.getByTestId('manual-water-latest-result')).toContainText(/stopped|OFF/i, { timeout: 15000 });
     await page.getByRole('button', { name: 'Irrigation Policy' }).click();
     await expect(page.getByTestId('policy-land-area-input')).toBeVisible();
+    await expect(page.getByTestId('policy-pump-capacity-input')).toBeVisible();
+    await expect(page.getByTestId('policy-max-cycle-minutes-input')).toBeVisible();
     await expect(page.getByTestId('alarm-tick-threshold-select')).toBeVisible();
 
     await context.close();

@@ -29,6 +29,9 @@ type IrrigationData = {
     measuredMoisture?: number;
     action?: string;
     appliedLiters?: number;
+    runtimeSeconds?: number;
+    flowRateLpm?: number;
+    targetLiters?: number;
   }>;
   alerts: Array<{ message: string; message_bn: string }>;
   policy: {
@@ -38,6 +41,8 @@ type IrrigationData = {
     threshold: number;
     window: string;
     maxVolume: number;
+    pumpCapacityLpm: number;
+    maxCycleMinutes: number;
     alarmTickThreshold: number;
   };
 };
@@ -75,6 +80,8 @@ const DEFAULT_IRRIGATION: IrrigationData = {
     threshold: 65,
     window: '6:00 AM - 8:00 AM',
     maxVolume: 150,
+    pumpCapacityLpm: 35,
+    maxCycleMinutes: 12,
     alarmTickThreshold: 3,
   },
 };
@@ -104,6 +111,9 @@ type PumpSimulationResult = {
   action: string;
   message: string;
   appliedLiters: number;
+  runtimeSeconds?: number;
+  targetLiters?: number;
+  pumpCapacityLpm?: number;
 };
 
 const CROP_PROFILES: Record<string, { crop_bn: string; threshold: number; maxVolume: number }> = {
@@ -137,6 +147,8 @@ export const Irrigation: React.FC = () => {
   const [virtualDevice, setVirtualDevice] = useState<VirtualDevice | null>(null);
   const [softRefreshTick, setSoftRefreshTick] = useState(0);
   const [landAreaInput, setLandAreaInput] = useState('1');
+  const [pumpCapacityInput, setPumpCapacityInput] = useState('35');
+  const [maxCycleMinutesInput, setMaxCycleMinutesInput] = useState('12');
   const [animatedWaterGivenLiters, setAnimatedWaterGivenLiters] = useState(0);
   const lastRealtimeAutoTickAtRef = useRef(0);
 
@@ -164,11 +176,39 @@ export const Irrigation: React.FC = () => {
     return Math.max(1, Math.round(Number(profile.maxVolume || 150) * area));
   };
 
+  const calculateLandAwarePumpCapacityLpm = (landAreaAcres: unknown) => {
+    const area = normalizeLandAreaAcres(landAreaAcres);
+    return Math.max(20, Math.round(35 * area));
+  };
+
+  const normalizePumpCapacityLpm = (value: unknown, landAreaAcres: unknown) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return calculateLandAwarePumpCapacityLpm(landAreaAcres);
+    return Math.max(5, Math.min(5000, Math.round(parsed)));
+  };
+
+  const normalizeMaxCycleMinutes = (value: unknown) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return 12;
+    return Math.max(1, Math.min(120, Math.round(parsed)));
+  };
+
+  const formatWaterVolume = (litersValue: unknown) => {
+    const liters = Math.max(0, Number(litersValue || 0));
+    if (!Number.isFinite(liters)) return '0L';
+    if (liters >= 1000) {
+      return `${liters.toFixed(0)}L (${(liters / 1000).toFixed(2)} m3)`;
+    }
+    return `${liters.toFixed(liters >= 100 ? 0 : 1)}L`;
+  };
+
   const normalizeSchedulePolicy = (schedule: any) => {
     if (!schedule) return schedule;
     const cropName = String(schedule?.policy?.crop || 'Rice');
     const profile = CROP_PROFILES[cropName] || CROP_PROFILES.Rice;
     const landAreaAcres = normalizeLandAreaAcres(schedule?.policy?.landAreaAcres ?? 1);
+    const pumpCapacityLpm = normalizePumpCapacityLpm(schedule?.policy?.pumpCapacityLpm, landAreaAcres);
+    const maxCycleMinutes = normalizeMaxCycleMinutes(schedule?.policy?.maxCycleMinutes);
     return {
       ...schedule,
       policy: {
@@ -177,6 +217,8 @@ export const Irrigation: React.FC = () => {
         crop_bn: schedule?.policy?.crop_bn || profile.crop_bn,
         landAreaAcres,
         maxVolume: calculateLandAwareMaxVolume(cropName, landAreaAcres),
+        pumpCapacityLpm,
+        maxCycleMinutes,
       },
     };
   };
@@ -255,6 +297,9 @@ export const Irrigation: React.FC = () => {
         action: result?.action || 'idle',
         message: result?.message || '',
         appliedLiters: Number(result?.appliedLiters || 0),
+        runtimeSeconds: Number(result?.runtimeSeconds || 0),
+        targetLiters: Number(result?.targetLiters || 0),
+        pumpCapacityLpm: Number(result?.pumpCapacityLpm || 0),
       });
       setLastUpdated(new Date());
     } catch (error) {
@@ -313,6 +358,17 @@ export const Irrigation: React.FC = () => {
     return history[history.length - 1];
   }, [data.sensorHistory]);
 
+  const lastWateringTick = useMemo(() => {
+    const history = data.sensorHistory || [];
+    for (let idx = history.length - 1; idx >= 0; idx -= 1) {
+      const tick = history[idx];
+      if (tick?.action === 'watering' && Number(tick?.appliedLiters || 0) > 0) {
+        return tick;
+      }
+    }
+    return null;
+  }, [data.sensorHistory]);
+
   const pumpIsActive = useMemo(() => {
     const actuatorState = String(virtualDevice?.actuatorState || '').toLowerCase();
     if (actuatorState === 'watering' || actuatorState === 'on') return true;
@@ -324,13 +380,74 @@ export const Irrigation: React.FC = () => {
     const fromSimulation = Number(lastPumpSimulation?.appliedLiters || 0);
     const fromSensorTick = Number(latestSensorTick?.appliedLiters || 0);
     const fromScheduleAmount = parseLitersFromAmount(data.amount);
-    return Math.round(Math.max(18, fromSimulation, fromSensorTick, fromScheduleAmount));
+    return Math.round(Math.max(0, fromSimulation, fromSensorTick, fromScheduleAmount));
   }, [pumpIsActive, lastPumpSimulation?.appliedLiters, latestSensorTick?.appliedLiters, data.amount]);
+
+  const latestDeliveredLiters = useMemo(() => {
+    const fromWateringTick = Number(lastWateringTick?.appliedLiters || 0);
+    const fromLastResult = lastPumpSimulation?.action === 'watering'
+      ? Number(lastPumpSimulation?.appliedLiters || 0)
+      : 0;
+    return Math.round(Math.max(0, fromWateringTick, fromLastResult));
+  }, [lastWateringTick?.appliedLiters, lastPumpSimulation?.action, lastPumpSimulation?.appliedLiters]);
+
+  const cycleDisplayLiters = pumpIsActive
+    ? animatedWaterGivenLiters
+    : latestDeliveredLiters;
 
   const totalWaterGivenLiters = useMemo(() => {
     const history = data.sensorHistory || [];
     return history.reduce((sum, tick) => sum + Math.max(0, Number(tick?.appliedLiters || 0)), 0);
   }, [data.sensorHistory]);
+
+  const pumpCapacityLpm = useMemo(() => {
+    const fromSensorTick = Number(latestSensorTick?.flowRateLpm || 0);
+    const fromLastResult = Number(lastPumpSimulation?.pumpCapacityLpm || 0);
+    const fromPolicy = Number(data.policy?.pumpCapacityLpm || 0);
+    return normalizePumpCapacityLpm(
+      Math.max(fromSensorTick, fromLastResult, fromPolicy),
+      data.policy?.landAreaAcres ?? 1,
+    );
+  }, [
+    latestSensorTick?.flowRateLpm,
+    lastPumpSimulation?.pumpCapacityLpm,
+    data.policy?.pumpCapacityLpm,
+    data.policy?.landAreaAcres,
+  ]);
+
+  const maxCycleMinutes = normalizeMaxCycleMinutes(data.policy?.maxCycleMinutes);
+
+  const currentRuntimeSeconds = useMemo(() => {
+    const fromWateringTick = Number(lastWateringTick?.runtimeSeconds || 0);
+    const fromLastResult = lastPumpSimulation?.action === 'watering'
+      ? Number(lastPumpSimulation?.runtimeSeconds || 0)
+      : 0;
+    const baselineLiters = Math.max(currentFlowLiters, latestDeliveredLiters);
+    const fallbackSeconds = baselineLiters > 0
+      ? Math.max(1, Math.ceil((baselineLiters / Math.max(1, pumpCapacityLpm)) * 60))
+      : 0;
+    return Math.max(fromWateringTick, fromLastResult, fallbackSeconds);
+  }, [
+    lastWateringTick?.runtimeSeconds,
+    lastPumpSimulation?.action,
+    lastPumpSimulation?.runtimeSeconds,
+    currentFlowLiters,
+    latestDeliveredLiters,
+    pumpCapacityLpm,
+  ]);
+
+  const currentTargetLiters = useMemo(() => {
+    const fromWateringTick = Number(lastWateringTick?.targetLiters || 0);
+    const fromLastResult = lastPumpSimulation?.action === 'watering'
+      ? Number(lastPumpSimulation?.targetLiters || 0)
+      : 0;
+    return Math.max(latestDeliveredLiters, fromWateringTick, fromLastResult);
+  }, [
+    latestDeliveredLiters,
+    lastWateringTick?.targetLiters,
+    lastPumpSimulation?.action,
+    lastPumpSimulation?.targetLiters,
+  ]);
 
   const flowPulseDuration = useMemo(() => {
     if (!pumpIsActive) return 2.4;
@@ -680,7 +797,9 @@ export const Irrigation: React.FC = () => {
     const profile = CROP_PROFILES[nextCrop] || CROP_PROFILES.Rice;
     const currentLandArea = normalizeLandAreaAcres(data.policy?.landAreaAcres ?? 1);
     const nextMaxVolume = calculateLandAwareMaxVolume(nextCrop, currentLandArea);
+    const nextPumpCapacityLpm = calculateLandAwarePumpCapacityLpm(currentLandArea);
     setManualPumpLiters(nextMaxVolume);
+    setPumpCapacityInput(String(nextPumpCapacityLpm));
     await persistUpdates({
       policy: {
         ...data.policy,
@@ -689,6 +808,8 @@ export const Irrigation: React.FC = () => {
         threshold: profile.threshold,
         landAreaAcres: currentLandArea,
         maxVolume: nextMaxVolume,
+        pumpCapacityLpm: nextPumpCapacityLpm,
+        maxCycleMinutes,
         alarmTickThreshold,
       },
     });
@@ -699,14 +820,18 @@ export const Irrigation: React.FC = () => {
   const handleLandAreaChange = async (nextValue: number) => {
     const nextLandAreaAcres = normalizeLandAreaAcres(nextValue);
     const nextMaxVolume = calculateLandAwareMaxVolume(data.policy?.crop || 'Rice', nextLandAreaAcres);
+    const nextPumpCapacityLpm = calculateLandAwarePumpCapacityLpm(nextLandAreaAcres);
     setManualPumpLiters(nextMaxVolume);
     setLandAreaInput(String(nextLandAreaAcres));
+    setPumpCapacityInput(String(nextPumpCapacityLpm));
 
     await persistUpdates({
       policy: {
         ...data.policy,
         landAreaAcres: nextLandAreaAcres,
         maxVolume: nextMaxVolume,
+        pumpCapacityLpm: nextPumpCapacityLpm,
+        maxCycleMinutes,
         alarmTickThreshold,
       },
     });
@@ -714,6 +839,40 @@ export const Irrigation: React.FC = () => {
 
   const commitLandAreaInput = async () => {
     await handleLandAreaChange(Number(landAreaInput));
+  };
+
+  const handlePumpCapacityChange = async (nextValue: number) => {
+    const nextPumpCapacityLpm = normalizePumpCapacityLpm(nextValue, data.policy?.landAreaAcres ?? 1);
+    setPumpCapacityInput(String(nextPumpCapacityLpm));
+    await persistUpdates({
+      policy: {
+        ...data.policy,
+        pumpCapacityLpm: nextPumpCapacityLpm,
+        maxCycleMinutes,
+        alarmTickThreshold,
+      },
+    });
+  };
+
+  const commitPumpCapacityInput = async () => {
+    await handlePumpCapacityChange(Number(pumpCapacityInput));
+  };
+
+  const handleMaxCycleMinutesChange = async (nextValue: number) => {
+    const nextMaxCycleMinutes = normalizeMaxCycleMinutes(nextValue);
+    setMaxCycleMinutesInput(String(nextMaxCycleMinutes));
+    await persistUpdates({
+      policy: {
+        ...data.policy,
+        pumpCapacityLpm,
+        maxCycleMinutes: nextMaxCycleMinutes,
+        alarmTickThreshold,
+      },
+    });
+  };
+
+  const commitMaxCycleMinutesInput = async () => {
+    await handleMaxCycleMinutesChange(Number(maxCycleMinutesInput));
   };
 
   const handleAlarmTickThresholdChange = async (nextValue: number) => {
@@ -750,6 +909,15 @@ export const Irrigation: React.FC = () => {
     const nextLandArea = normalizeLandAreaAcres(data.policy?.landAreaAcres ?? 1);
     setLandAreaInput(String(nextLandArea));
   }, [data.policy?.landAreaAcres]);
+
+  useEffect(() => {
+    const normalizedCapacity = normalizePumpCapacityLpm(data.policy?.pumpCapacityLpm, data.policy?.landAreaAcres ?? 1);
+    setPumpCapacityInput(String(normalizedCapacity));
+  }, [data.policy?.pumpCapacityLpm, data.policy?.landAreaAcres]);
+
+  useEffect(() => {
+    setMaxCycleMinutesInput(String(normalizeMaxCycleMinutes(data.policy?.maxCycleMinutes)));
+  }, [data.policy?.maxCycleMinutes]);
 
   if (loading) {
     return (
@@ -1023,7 +1191,7 @@ export const Irrigation: React.FC = () => {
                   {lang === 'bn' ? 'মোটর স্ট্যাটাস' : 'Motor Status'}: {pumpIsActive ? (lang === 'bn' ? 'চালু' : 'Running') : (lang === 'bn' ? 'বন্ধ' : 'Idle')}
                 </span>
                 <span>
-                  {lang === 'bn' ? 'রিয়েল-টাইম ফ্লো' : 'Real-time Flow'}: {pumpIsActive ? `${currentFlowLiters}L/cycle` : `0L/cycle`}
+                  {lang === 'bn' ? 'রিয়েল-টাইম ফ্লো' : 'Real-time Flow'}: {pumpIsActive ? `${formatWaterVolume(currentFlowLiters)}/cycle` : `0L/cycle`}
                 </span>
                 <span>
                   {lang === 'bn' ? 'ময়েশ্চার' : 'Moisture'}: {Math.round(Number(data.moisture || 0))}%
@@ -1042,17 +1210,42 @@ export const Irrigation: React.FC = () => {
                   className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-blue-700"
                 >
                   {lang === 'bn'
-                    ? `চলমান চক্রে পানি: ${animatedWaterGivenLiters.toFixed(1)}L`
-                    : `Water given (current cycle): ${animatedWaterGivenLiters.toFixed(1)}L`}
+                    ? `বর্তমান/সর্বশেষ চক্রে পানি: ${formatWaterVolume(cycleDisplayLiters)}`
+                    : `Water given (current or last cycle): ${formatWaterVolume(cycleDisplayLiters)}`}
                 </span>
                 <span
                   data-testid="pump-water-given-total"
                   className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700"
                 >
                   {lang === 'bn'
-                    ? `মোট দেওয়া পানি: ${totalWaterGivenLiters.toFixed(1)}L`
-                    : `Total water given: ${totalWaterGivenLiters.toFixed(1)}L`}
+                    ? `মোট দেওয়া পানি: ${formatWaterVolume(totalWaterGivenLiters)}`
+                    : `Total water given: ${formatWaterVolume(totalWaterGivenLiters)}`}
                 </span>
+              </div>
+              <div
+                data-testid="pump-watering-logic"
+                className="mt-2 rounded-lg border border-slate-200 bg-white/80 p-2 text-[11px] text-slate-700"
+              >
+                <p>
+                  {lang === 'bn'
+                    ? `পাম্প ক্যাপাসিটি: ${pumpCapacityLpm} L/min (~${(pumpCapacityLpm / 60).toFixed(2)} L/s)`
+                    : `Pump capacity: ${pumpCapacityLpm} L/min (~${(pumpCapacityLpm / 60).toFixed(2)} L/s)`}
+                </p>
+                <p>
+                  {lang === 'bn'
+                    ? `টার্গেট: ${formatWaterVolume(currentTargetLiters)} | ডেলিভারি: ${formatWaterVolume(cycleDisplayLiters)}`
+                    : `Target: ${formatWaterVolume(currentTargetLiters)} | Delivered: ${formatWaterVolume(cycleDisplayLiters)}`}
+                </p>
+                <p>
+                  {lang === 'bn'
+                    ? `রান টাইম: ${currentRuntimeSeconds}s (সাইকেল সীমা ${maxCycleMinutes} min)`
+                    : `Run time: ${currentRuntimeSeconds}s (cycle limit ${maxCycleMinutes} min)`}
+                </p>
+                <p className="text-slate-600">
+                  {lang === 'bn'
+                    ? 'লজিক: Delivered = min(Target, Capacity × Runtime)'
+                    : 'Logic: Delivered = min(Target, Capacity x Runtime)'}
+                </p>
               </div>
             </div>
           </div>
@@ -1337,6 +1530,56 @@ export const Irrigation: React.FC = () => {
                 }}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
               />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">{lang === 'bn' ? 'পাম্প ক্যাপাসিটি (L/min)' : 'Pump Capacity (L/min)'}</label>
+              <input
+                data-testid="policy-pump-capacity-input"
+                type="number"
+                min={5}
+                max={5000}
+                step={1}
+                value={pumpCapacityInput}
+                onChange={(e) => setPumpCapacityInput(e.target.value)}
+                onBlur={() => void commitPumpCapacityInput()}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    void commitPumpCapacityInput();
+                  }
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                {lang === 'bn'
+                  ? 'এটি ব্যবহার করে অটো/ম্যানুয়াল মোডে প্রতি মিনিটে পানি দেওয়ার হিসাব করা হয়'
+                  : 'Used to calculate delivered water per minute in both auto and manual modes'}
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">{lang === 'bn' ? 'সর্বোচ্চ সাইকেল সময় (মিনিট)' : 'Max Cycle Time (minutes)'}</label>
+              <input
+                data-testid="policy-max-cycle-minutes-input"
+                type="number"
+                min={1}
+                max={120}
+                step={1}
+                value={maxCycleMinutesInput}
+                onChange={(e) => setMaxCycleMinutesInput(e.target.value)}
+                onBlur={() => void commitMaxCycleMinutesInput()}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    void commitMaxCycleMinutesInput();
+                  }
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                {lang === 'bn'
+                  ? 'প্রতি সাইকেলে কত মিনিট পানি চালু থাকতে পারবে তার সীমা'
+                  : 'Upper runtime limit for one watering cycle'}
+              </p>
             </div>
             <div>
               <label className="block text-sm text-gray-600 mb-1">{lang === 'bn' ? 'সেচ সময়' : 'Irrigation Window'}</label>

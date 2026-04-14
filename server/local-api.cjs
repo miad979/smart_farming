@@ -731,9 +731,58 @@ function calculateIrrigationMaxVolume(cropName, landAreaAcres) {
   return Math.max(1, Math.round(perAcreVolume * area))
 }
 
+function calculateDefaultPumpCapacityLpm(landAreaAcres) {
+  const area = normalizeLandAreaAcres(landAreaAcres)
+  return Math.max(20, Math.round(35 * area))
+}
+
+function normalizePumpCapacityLpm(value, landAreaAcres = 1) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) {
+    return calculateDefaultPumpCapacityLpm(landAreaAcres)
+  }
+  return Math.max(5, Math.min(5000, Math.round(parsed)))
+}
+
+function normalizeMaxCycleMinutes(value) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return 12
+  return Math.max(1, Math.min(120, Math.round(parsed)))
+}
+
+function applyPumpCapacityForCycle({ targetLiters, pumpCapacityLpm, maxCycleMinutes }) {
+  const safeTarget = Math.max(0, Number(targetLiters || 0))
+  const safeCapacity = Math.max(1, Number(pumpCapacityLpm || 1))
+  const safeMaxCycleMinutes = Math.max(1, Number(maxCycleMinutes || 1))
+
+  if (safeTarget <= 0) {
+    return {
+      targetLiters: 0,
+      appliedLiters: 0,
+      runtimeSeconds: 0,
+      cappedByCycle: false,
+    }
+  }
+
+  const flowPerSecond = safeCapacity / 60
+  const requiredSeconds = safeTarget / flowPerSecond
+  const allowedSeconds = safeMaxCycleMinutes * 60
+  const runtimeSeconds = Math.max(1, Math.ceil(Math.min(requiredSeconds, allowedSeconds)))
+  const deliveredLiters = Math.max(1, Math.round(flowPerSecond * runtimeSeconds))
+  const appliedLiters = Math.min(safeTarget, deliveredLiters)
+
+  return {
+    targetLiters: safeTarget,
+    appliedLiters,
+    runtimeSeconds,
+    cappedByCycle: requiredSeconds > allowedSeconds,
+  }
+}
+
 function createDefaultIrrigationSchedule(userId, cropName = 'Rice') {
   const profile = getIrrigationCropPolicy(cropName)
   const landAreaAcres = 1
+  const pumpCapacityLpm = calculateDefaultPumpCapacityLpm(landAreaAcres)
   return {
     id: userId,
     userId,
@@ -769,6 +818,8 @@ function createDefaultIrrigationSchedule(userId, cropName = 'Rice') {
       window: profile.window,
       landAreaAcres,
       maxVolume: calculateIrrigationMaxVolume(profile.crop, landAreaAcres),
+      pumpCapacityLpm,
+      maxCycleMinutes: 12,
       alarmTickThreshold: 3,
     },
     updatedAt: nowIso(),
@@ -792,7 +843,7 @@ function upsertIrrigationUsageForToday(schedule, liters) {
   return usage
 }
 
-function appendSensorHistory(schedule, { measuredMoisture, moisture, action, appliedLiters }) {
+function appendSensorHistory(schedule, { measuredMoisture, moisture, action, appliedLiters, runtimeSeconds, flowRateLpm, targetLiters }) {
   const history = Array.isArray(schedule.sensorHistory) ? [...schedule.sensorHistory] : []
   history.push({
     id: id('sensor_tick'),
@@ -801,6 +852,9 @@ function appendSensorHistory(schedule, { measuredMoisture, moisture, action, app
     moisture: Number(moisture),
     action: action || 'idle',
     appliedLiters: Number(appliedLiters || 0),
+    runtimeSeconds: Number(runtimeSeconds || 0),
+    flowRateLpm: Number(flowRateLpm || 0),
+    targetLiters: Number(targetLiters || 0),
   })
   return history.slice(-20)
 }
@@ -822,17 +876,28 @@ function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
   const threshold = Number(schedule?.policy?.threshold || 60)
   const maxVolume = Number(schedule?.policy?.maxVolume || 120)
   const landAreaAcres = normalizeLandAreaAcres(schedule?.policy?.landAreaAcres ?? 1)
+  const pumpCapacityLpm = normalizePumpCapacityLpm(schedule?.policy?.pumpCapacityLpm, landAreaAcres)
+  const maxCycleMinutes = normalizeMaxCycleMinutes(schedule?.policy?.maxCycleMinutes)
   const forcePump = normalizeForcedPumpAction(options?.forcePump)
   const requestedLiters = Number(options?.manualLiters || 0)
   const safeRequestedLiters = Number.isFinite(requestedLiters) ? requestedLiters : 0
   const nextSchedule = { ...schedule, moisture: measuredMoisture, alerts: [] }
   let action = 'idle'
   let appliedLiters = 0
+  let runtimeSeconds = 0
+  let targetLiters = 0
   let reason = 'Sensor tick processed'
 
   if (forcePump === 'on') {
     const fallbackManualLiters = Math.max(1, Math.round(45 * landAreaAcres))
-    appliedLiters = Math.min(maxVolume, Math.max(1, safeRequestedLiters || fallbackManualLiters))
+    targetLiters = Math.min(maxVolume, Math.max(1, safeRequestedLiters || fallbackManualLiters))
+    const cycle = applyPumpCapacityForCycle({
+      targetLiters,
+      pumpCapacityLpm,
+      maxCycleMinutes,
+    })
+    appliedLiters = cycle.appliedLiters
+    runtimeSeconds = cycle.runtimeSeconds
     const moistureLift = Math.max(6, Math.round(appliedLiters * 0.35))
     nextSchedule.moisture = Math.min(95, measuredMoisture + moistureLift)
     nextSchedule.amount = `${appliedLiters}L`
@@ -845,7 +910,9 @@ function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
       },
     ]
     action = 'watering'
-    reason = 'Virtual pump forced ON for simulation'
+    reason = cycle.cappedByCycle
+      ? `Manual watering partially delivered due to cycle limit (${maxCycleMinutes} min)`
+      : `Manual watering delivered using ${pumpCapacityLpm} L/min capacity`
     nextSchedule.usage = upsertIrrigationUsageForToday(nextSchedule, appliedLiters)
   } else if (forcePump === 'off') {
     nextSchedule.amount = '0L'
@@ -863,8 +930,17 @@ function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
     const deficit = threshold - measuredMoisture
     const minAutoLiters = Math.max(1, Math.round(20 * landAreaAcres))
     const deficitDrivenLiters = Math.round(deficit * 3.2 * landAreaAcres)
-    appliedLiters = Math.min(maxVolume, Math.max(minAutoLiters, deficitDrivenLiters))
-    nextSchedule.moisture = Math.min(95, measuredMoisture + Math.max(8, Math.round(deficit * 0.9)))
+    targetLiters = Math.min(maxVolume, Math.max(minAutoLiters, deficitDrivenLiters))
+    const cycle = applyPumpCapacityForCycle({
+      targetLiters,
+      pumpCapacityLpm,
+      maxCycleMinutes,
+    })
+    appliedLiters = cycle.appliedLiters
+    runtimeSeconds = cycle.runtimeSeconds
+    const deliveryRatio = targetLiters > 0 ? Math.max(0.2, appliedLiters / targetLiters) : 0
+    const moistureLift = Math.max(4, Math.round(Math.max(8, deficit * 0.9) * deliveryRatio))
+    nextSchedule.moisture = Math.min(95, measuredMoisture + moistureLift)
     nextSchedule.amount = `${appliedLiters}L`
     nextSchedule.nextWatering = 'Auto adjusted after sensor reading'
     nextSchedule.nextWatering_bn = 'সেন্সর রিডিং অনুযায়ী স্বয়ংক্রিয় সমন্বয়'
@@ -875,7 +951,9 @@ function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
       },
     ]
     action = 'watering'
-    reason = 'Automatic irrigation applied from virtual sensor'
+    reason = cycle.cappedByCycle
+      ? `Auto watering reached cycle limit (${maxCycleMinutes} min); remaining demand carries to next tick`
+      : 'Automatic irrigation applied from virtual sensor'
     nextSchedule.usage = upsertIrrigationUsageForToday(nextSchedule, appliedLiters)
   } else {
     nextSchedule.amount = nextSchedule.amount || '0L'
@@ -885,7 +963,15 @@ function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
   }
 
   nextSchedule.updatedAt = nowIso()
-  return { schedule: nextSchedule, action, appliedLiters, reason }
+  return {
+    schedule: nextSchedule,
+    action,
+    appliedLiters,
+    runtimeSeconds,
+    targetLiters,
+    pumpCapacityLpm,
+    reason,
+  }
 }
 
 function send(res, status, payload) {
@@ -4250,6 +4336,17 @@ function createLocalApiMiddleware() {
             ?? existing?.policy?.landAreaAcres
             ?? 1,
         )
+        const nextPumpCapacityLpm = normalizePumpCapacityLpm(
+          updates?.policy?.pumpCapacityLpm
+            ?? schedule?.policy?.pumpCapacityLpm
+            ?? existing?.policy?.pumpCapacityLpm,
+          nextLandAreaAcres,
+        )
+        const nextMaxCycleMinutes = normalizeMaxCycleMinutes(
+          updates?.policy?.maxCycleMinutes
+            ?? schedule?.policy?.maxCycleMinutes
+            ?? existing?.policy?.maxCycleMinutes,
+        )
 
         schedule.policy = {
           ...(schedule.policy || {}),
@@ -4259,6 +4356,8 @@ function createLocalApiMiddleware() {
           window: schedule?.policy?.window || profile.window,
           landAreaAcres: nextLandAreaAcres,
           maxVolume: calculateIrrigationMaxVolume(profile.crop, nextLandAreaAcres),
+          pumpCapacityLpm: nextPumpCapacityLpm,
+          maxCycleMinutes: nextMaxCycleMinutes,
           alarmTickThreshold: normalizeAlarmTickThreshold(schedule?.policy?.alarmTickThreshold),
         }
 
@@ -4565,6 +4664,15 @@ function createLocalApiMiddleware() {
             ?? existingSchedule?.policy?.landAreaAcres
             ?? 1,
         )
+        const setupPumpCapacityLpm = normalizePumpCapacityLpm(
+          body?.pumpCapacityLpm
+            ?? existingSchedule?.policy?.pumpCapacityLpm,
+          setupLandAreaAcres,
+        )
+        const setupMaxCycleMinutes = normalizeMaxCycleMinutes(
+          body?.maxCycleMinutes
+            ?? existingSchedule?.policy?.maxCycleMinutes,
+        )
         const schedule = {
           ...existingSchedule,
           userId: authId,
@@ -4577,6 +4685,8 @@ function createLocalApiMiddleware() {
             window: existingSchedule?.policy?.window || cropProfile.window,
             landAreaAcres: setupLandAreaAcres,
             maxVolume: calculateIrrigationMaxVolume(cropProfile.crop, setupLandAreaAcres),
+            pumpCapacityLpm: setupPumpCapacityLpm,
+            maxCycleMinutes: setupMaxCycleMinutes,
             alarmTickThreshold: normalizeAlarmTickThreshold(existingSchedule?.policy?.alarmTickThreshold),
           },
           updatedAt: nowIso(),
@@ -4615,6 +4725,15 @@ function createLocalApiMiddleware() {
             ?? existingSchedule?.policy?.landAreaAcres
             ?? 1,
         )
+        const simulationPumpCapacityLpm = normalizePumpCapacityLpm(
+          body?.pumpCapacityLpm
+            ?? existingSchedule?.policy?.pumpCapacityLpm,
+          simulationLandAreaAcres,
+        )
+        const simulationMaxCycleMinutes = normalizeMaxCycleMinutes(
+          body?.maxCycleMinutes
+            ?? existingSchedule?.policy?.maxCycleMinutes,
+        )
         const currentMoisture = Number(existingSchedule.moisture ?? device?.telemetry?.soilMoisture ?? 68)
         const measuredInput = Number(body?.measuredMoisture)
         const hasMeasuredInput = Number.isFinite(measuredInput)
@@ -4638,12 +4757,14 @@ function createLocalApiMiddleware() {
             window: existingSchedule?.policy?.window || cropProfile.window,
             landAreaAcres: simulationLandAreaAcres,
             maxVolume: calculateIrrigationMaxVolume(cropProfile.crop, simulationLandAreaAcres),
+            pumpCapacityLpm: simulationPumpCapacityLpm,
+            maxCycleMinutes: simulationMaxCycleMinutes,
             alarmTickThreshold: normalizeAlarmTickThreshold(existingSchedule?.policy?.alarmTickThreshold),
           },
           deviceId,
         }
 
-        const { schedule, action, appliedLiters, reason } = runAutoIrrigationDecision(
+        const { schedule, action, appliedLiters, runtimeSeconds, targetLiters, pumpCapacityLpm, reason } = runAutoIrrigationDecision(
           scheduleWithPolicy,
           measuredMoisture,
           { forcePump, manualLiters },
@@ -4658,6 +4779,15 @@ function createLocalApiMiddleware() {
           }
           schedule.policy = {
             ...(schedule.policy || {}),
+            pumpCapacityLpm: normalizePumpCapacityLpm(
+              latestPersistedSchedule?.policy?.pumpCapacityLpm
+                ?? schedule?.policy?.pumpCapacityLpm,
+              schedule?.policy?.landAreaAcres,
+            ),
+            maxCycleMinutes: normalizeMaxCycleMinutes(
+              latestPersistedSchedule?.policy?.maxCycleMinutes
+                ?? schedule?.policy?.maxCycleMinutes,
+            ),
             alarmTickThreshold: normalizeAlarmTickThreshold(
               latestPersistedSchedule?.policy?.alarmTickThreshold
                 ?? schedule?.policy?.alarmTickThreshold,
@@ -4670,6 +4800,9 @@ function createLocalApiMiddleware() {
           moisture: schedule.moisture,
           action,
           appliedLiters,
+          runtimeSeconds,
+          flowRateLpm: pumpCapacityLpm,
+          targetLiters,
         })
         db.irrigation[authId] = schedule
 
@@ -4697,6 +4830,9 @@ function createLocalApiMiddleware() {
           helpLineNumber: getDeviceHelpLineNumber(db),
           action,
           appliedLiters,
+          runtimeSeconds,
+          targetLiters,
+          pumpCapacityLpm,
           simulatedInput: {
             measuredMoisture,
             forcePump: forcePump || 'auto',
