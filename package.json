@@ -7,7 +7,7 @@
   "author": "Smart Farming Dev Team",
   "license": "PROPRIETARY",
   "scripts": {
-    "dev": "node server/ensure-local-postgres.cjs && vite",
+    "dev": "node server/dev-start.cjs",
     "build": "vite build",
     "test:security": "node server/security-tests.cjs",
     "test:actions": "node server/action-workflow-test.cjs",
