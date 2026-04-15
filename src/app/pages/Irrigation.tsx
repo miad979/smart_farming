@@ -705,9 +705,10 @@ export const Irrigation: React.FC = () => {
   ]);
 
   useEffect(() => {
-    if (!autoSimulation || state.userMode === 'guest' || !state.accessToken) return;
+    if (!autoMode || !autoSimulation || state.userMode === 'guest' || !state.accessToken) return;
     lastRealtimeAutoTickAtRef.current = Date.now();
     const runRealtimeTick = () => {
+      if (!autoMode) return;
       if (String(virtualDevice?.actuatorState || '').toLowerCase() === 'watering') return;
       if (autoTickInFlightRef.current) return;
 
@@ -726,6 +727,7 @@ export const Irrigation: React.FC = () => {
 
     return () => clearInterval(timer);
   }, [
+    autoMode,
     autoSimulation,
     autoSimulationIntervalMs,
     state.userMode,
