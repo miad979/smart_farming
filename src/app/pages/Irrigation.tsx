@@ -151,6 +151,8 @@ export const Irrigation: React.FC = () => {
   const [pumpCapacityInput, setPumpCapacityInput] = useState('35');
   const [maxCycleMinutesInput, setMaxCycleMinutesInput] = useState('12');
   const [animatedWaterGivenLiters, setAnimatedWaterGivenLiters] = useState(0);
+  const [etaNowMs, setEtaNowMs] = useState(() => Date.now());
+  const [wateringSessionStartedAtMs, setWateringSessionStartedAtMs] = useState<number | null>(null);
   const lastRealtimeAutoTickAtRef = useRef(0);
 
   const normalizeAlarmTickThreshold = (value: unknown) => {
@@ -202,6 +204,23 @@ export const Irrigation: React.FC = () => {
       return `${roundedLiters}L (${(liters / 1000).toFixed(2)} m3)`;
     }
     return `${roundedLiters}L`;
+  };
+
+  const formatEtaCountdown = (secondsValue: unknown) => {
+    const seconds = Math.max(0, Math.floor(Number(secondsValue || 0)));
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+
+    if (lang === 'bn') {
+      if (hours > 0) return `${hours} ঘণ্টা ${minutes} মিনিট`;
+      if (minutes > 0) return `${minutes} মিনিট ${secs} সেকেন্ড`;
+      return `${secs} সেকেন্ড`;
+    }
+
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    if (minutes > 0) return `${minutes}m ${secs}s`;
+    return `${secs}s`;
   };
 
   const normalizeSchedulePolicy = (schedule: any) => {
@@ -439,6 +458,25 @@ export const Irrigation: React.FC = () => {
     pumpCapacityLpm,
   ]);
 
+  const remainingWateringSeconds = useMemo(() => {
+    if (!pumpIsActive || currentRuntimeSeconds <= 0) return 0;
+    const fallbackRemaining = Math.max(0, Math.ceil(currentRuntimeSeconds));
+    if (!wateringSessionStartedAtMs) return fallbackRemaining;
+
+    const elapsedSeconds = Math.max(0, Math.floor((etaNowMs - wateringSessionStartedAtMs) / 1000));
+    return Math.max(0, Math.ceil(currentRuntimeSeconds - elapsedSeconds));
+  }, [pumpIsActive, currentRuntimeSeconds, etaNowMs, wateringSessionStartedAtMs]);
+
+  const etaCountdownLabel = useMemo(() => {
+    if (!pumpIsActive) return '';
+    if (remainingWateringSeconds <= 0) {
+      return lang === 'bn' ? 'ETA: প্রায় সম্পন্ন' : 'ETA: almost done';
+    }
+    return lang === 'bn'
+      ? `ETA: ${formatEtaCountdown(remainingWateringSeconds)} বাকি`
+      : `ETA: ${formatEtaCountdown(remainingWateringSeconds)} remaining`;
+  }, [pumpIsActive, remainingWateringSeconds, lang]);
+
   const currentTargetLiters = useMemo(() => {
     const fromWateringTick = Number(lastWateringTick?.targetLiters || 0);
     const fromLastResult = lastPumpSimulation?.action === 'watering'
@@ -670,6 +708,35 @@ export const Irrigation: React.FC = () => {
     virtualDevice?.actuatorState,
     virtualDevice?.telemetry?.soilMoisture,
   ]);
+
+  useEffect(() => {
+    if (!pumpIsActive) {
+      setWateringSessionStartedAtMs(null);
+      return;
+    }
+
+    const wateringTimestamp = latestSensorTick?.action === 'watering'
+      ? Date.parse(String(latestSensorTick?.timestamp || ''))
+      : NaN;
+
+    if (Number.isFinite(wateringTimestamp)) {
+      setWateringSessionStartedAtMs((prev) => (prev === wateringTimestamp ? prev : wateringTimestamp));
+      return;
+    }
+
+    setWateringSessionStartedAtMs((prev) => prev ?? Date.now());
+  }, [pumpIsActive, latestSensorTick?.id, latestSensorTick?.action, latestSensorTick?.timestamp]);
+
+  useEffect(() => {
+    if (!pumpIsActive || currentRuntimeSeconds <= 0) return;
+
+    setEtaNowMs(Date.now());
+    const timer = setInterval(() => {
+      setEtaNowMs(Date.now());
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [pumpIsActive, currentRuntimeSeconds, wateringSessionStartedAtMs]);
 
   useEffect(() => {
     if (!pumpIsActive || currentRuntimeSeconds <= 0) return;
@@ -1265,7 +1332,7 @@ export const Irrigation: React.FC = () => {
                         : `Done ${formatWaterVolume(cycleDisplayLiters)} / ${formatWaterVolume(currentTargetLiters)}`}
                     </p>
                     <p className="text-sm text-blue-600 mt-1">
-                      Target: {formatWaterVolume(currentTargetLiters)} | {((cycleDisplayLiters / Math.max(1, currentTargetLiters)) * 100).toFixed(1)}%
+                      Target: {formatWaterVolume(currentTargetLiters)} | {((cycleDisplayLiters / Math.max(1, currentTargetLiters)) * 100).toFixed(1)}% | {etaCountdownLabel}
                     </p>
                     <div className="w-full bg-gray-300 rounded-full h-2 mt-2 overflow-hidden">
                       <div
@@ -1309,8 +1376,8 @@ export const Irrigation: React.FC = () => {
                 >
                   {pumpIsActive && <Droplets className="w-5 h-5" />}
                   {lang === 'bn'
-                    ? `💧 Done ${formatWaterVolume(cycleDisplayLiters)} / ${formatWaterVolume(currentTargetLiters)}`
-                    : `💧 Done ${formatWaterVolume(cycleDisplayLiters)} / ${formatWaterVolume(currentTargetLiters)}`}
+                    ? `💧 Done ${formatWaterVolume(cycleDisplayLiters)} / ${formatWaterVolume(currentTargetLiters)} • ${etaCountdownLabel}`
+                    : `💧 Done ${formatWaterVolume(cycleDisplayLiters)} / ${formatWaterVolume(currentTargetLiters)} • ${etaCountdownLabel}`}
                 </span>
                 {!pumpIsActive && (
                   <span
