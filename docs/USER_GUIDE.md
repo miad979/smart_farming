@@ -38,21 +38,21 @@
 ### Understanding Guest Mode vs Logged In
 
 **Guest Mode (Default):**
-- ✅ Check disease detection
-- ✅ View irrigation status
-- ✅ Check market prices
-- ✅ View weather
-- ❌ Cannot save results
-- ❌ Cannot request consultations
-- ❌ No cloud sync
+-  Check disease detection
+-  View irrigation status
+-  Check market prices
+-  View weather
+-  Cannot save results
+-  cannot request consultations
+-  No cloud sync
 
 **Logged In Mode:**
-- ✅ All guest features
-- ✅ Save disease detection results
-- ✅ Request expert consultations
-- ✅ Maintain crop logs
-- ✅ Cloud sync across devices
-- ✅ Consultation history
+-  All guest features
+-  Save disease detection results
+-  Request expert consultations
+-  Maintain crop logs
+-  Cloud sync across devices
+-  Consultation history
 
 ### How to Login
 
@@ -73,14 +73,14 @@
 The dashboard is your home screen with quick access to everything.
 
 **Top Section:**
-- 🚨 **Urgent Alerts** - Critical notifications (low moisture, disease warnings)
-- 🌤️ **Weather Widget** - Current weather and 3-day forecast
+-  **Urgent Alerts** - Critical notifications (low moisture, disease warnings)
+-  **Weather Widget** - Current weather and 3-day forecast
 
 **Quick Stats Cards:**
-- 📸 **Disease Detection** - AI scan status
-- 💧 **Irrigation** - Soil moisture level
-- 📈 **Yield Forecast** - Expected harvest
-- 💰 **Market Prices** - Latest crop prices
+-  **Disease Detection** - AI scan status
+-  **Irrigation** - Soil moisture level
+-  **Yield Forecast** - Expected harvest
+-  **Market Prices** - Latest crop prices
 
 **Charts:**
 - Weekly irrigation usage
@@ -117,8 +117,8 @@ The dashboard is your home screen with quick access to everything.
    - Useful if you prefer listening
 
 6. **Save or Share Results**
-   - 💾 **Save:** Keep for your records (login required)
-   - 🔗 **Share:** Send to family/experts
+   -  **Save:** Keep for your records (login required)
+   -  **Share:** Send to family/experts
 
 7. **Ask Questions**
    - Use Chat Assistant for quick questions
@@ -216,8 +216,8 @@ Get notified when prices reach your target.
 - Rainfall probability
 
 **Weather Alerts:**
-- 🌧️ Heavy rain warnings
-- ⛈️ Storm alerts
+-  Heavy rain warnings
+-  Storm alerts
 - Displayed prominently if active
 
 **3-Day Forecast:**
@@ -370,14 +370,14 @@ Your farming diary:
 
 #### Verification Process
 
-**⚠️ You must be verified by an admin before accessing doctor features.**
+** You must be verified by an admin before accessing doctor features.**
 
 1. **Register/Login** as a doctor
 2. **Verification Pending** page appears
 3. Wait for admin review (usually 1-2 business days)
 4. Receive notification when:
-   - ✅ **Approved:** Full doctor access granted
-   - ❌ **Rejected:** Reason provided, can reapply
+   -  **Approved:** Full doctor access granted
+   -  **Rejected:** Reason provided, can reapply
 
 **While Waiting:**
 - Cannot access Doctor Panel
@@ -490,9 +490,11 @@ Once verified, you see:
    - AI-recommended treatment
 
 5. **Provide Expert Opinion:**
-   - ✅ **Approve:** AI is correct
-   - ❌ **Modify:** AI partially correct, add notes
-   - 🔄 **Correct:** AI wrong, provide correct diagnosis
+   -  **Approve:** AI is correct
+   -  **Modify:** AI partially correct, add notes
+   - 
+   
+    **Correct:** AI wrong, provide correct diagnosis
 
 6. **Add Expert Notes:**
    - Additional observations
@@ -860,6 +862,18 @@ Once verified, you see:
 
 ## Troubleshooting
 
+### Local Development Startup (Setup/Testing)
+
+**Problem:** Terminal shows exit code 1 when starting local server
+
+**Common Cause:** Running `NPM RUN DEV` in uppercase can fail with `Unknown command: "RUN"`.
+
+**Solutions:**
+1. Use the exact command: `npm run dev`
+2. If port 5173 is already busy, Vite may auto-switch to 5174 (this is normal)
+3. Open the Local URL shown in terminal output
+4. For a clean restart, stop any old Node dev process and run `npm run dev` again
+
 ### Disease Detection Not Working
 
 **Problem:** Can't take photo or upload image
@@ -1117,5 +1131,5 @@ A: Currently web-based. Native app planned for future.
 ---
 
 **Document Version:** 1.0  
-**Last Updated:** February 2026  
+**Last Updated:** April 2026  
 **For:** Smart Farming Management System v1.0
