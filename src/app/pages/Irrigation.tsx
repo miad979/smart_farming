@@ -1194,6 +1194,29 @@ export const Irrigation: React.FC = () => {
                   style={{ width: `${Math.max(8, Math.min(100, Number(data.moisture || 0)))}%` }}
                 />
               </div>
+              
+              {pumpIsActive && (
+                <div className="mt-4 rounded-xl border-3 border-blue-500 bg-gradient-to-r from-blue-50 to-cyan-50 p-4 shadow-md">
+                  <div className="text-center">
+                    <p className="text-xs font-bold text-blue-600 tracking-wide uppercase">Live Water Flow</p>
+                    <p className="text-3xl font-bold text-blue-700 mt-2">
+                      {formatWaterVolume(cycleDisplayLiters)}
+                    </p>
+                    <p className="text-sm text-blue-600 mt-1">
+                      Target: {formatWaterVolume(currentTargetLiters)} | {((cycleDisplayLiters / Math.max(1, currentTargetLiters)) * 100).toFixed(1)}%
+                    </p>
+                    <div className="w-full bg-gray-300 rounded-full h-2 mt-2 overflow-hidden">
+                      <div
+                        className="bg-gradient-to-r from-blue-500 to-cyan-500 h-full transition-all duration-300"
+                        style={{
+                          width: `${Math.max(0, Math.min(100, (cycleDisplayLiters / Math.max(1, currentTargetLiters)) * 100))}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+              
               <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-700">
                 <span>
                   {lang === 'bn' ? 'মোটর স্ট্যাটাস' : 'Motor Status'}: {pumpIsActive ? (lang === 'bn' ? 'চালু' : 'Running') : (lang === 'bn' ? 'বন্ধ' : 'Idle')}
@@ -1212,23 +1235,31 @@ export const Irrigation: React.FC = () => {
                   </span>
                 )}
               </div>
-              <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+              <div className={`mt-2 grid gap-2 text-sm transition-all duration-300 ${pumpIsActive ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2 text-[11px]'}`}>
                 <span
                   data-testid="pump-water-given-live"
-                  className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-blue-700"
+                  className={`inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 font-semibold transition-all duration-300 ${
+                    pumpIsActive
+                      ? 'border-blue-500 bg-blue-100 text-blue-900 text-base shadow-lg animate-pulse scale-105'
+                      : 'border-blue-200 bg-blue-50 text-blue-700'
+                  }`}
+                  style={pumpIsActive ? { backgroundColor: 'rgba(59, 130, 246, 0.2)', borderColor: 'rgb(59, 130, 246)' } : {}}
                 >
+                  {pumpIsActive && <Droplets className="w-5 h-5" />}
                   {lang === 'bn'
-                    ? `বর্তমান/সর্বশেষ চক্রে পানি: ${formatWaterVolume(cycleDisplayLiters)}`
-                    : `Water given (current or last cycle): ${formatWaterVolume(cycleDisplayLiters)}`}
+                    ? `💧 ${formatWaterVolume(cycleDisplayLiters)} / ${formatWaterVolume(currentTargetLiters)}`
+                    : `💧 ${formatWaterVolume(cycleDisplayLiters)} / ${formatWaterVolume(currentTargetLiters)}`}
                 </span>
-                <span
-                  data-testid="pump-water-given-total"
-                  className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700"
-                >
-                  {lang === 'bn'
-                    ? `মোট দেওয়া পানি: ${formatWaterVolume(totalWaterGivenLiters)}`
-                    : `Total water given: ${formatWaterVolume(totalWaterGivenLiters)}`}
-                </span>
+                {!pumpIsActive && (
+                  <span
+                    data-testid="pump-water-given-total"
+                    className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-700"
+                  >
+                    {lang === 'bn'
+                      ? `মোট: ${formatWaterVolume(totalWaterGivenLiters)}`
+                      : `Total: ${formatWaterVolume(totalWaterGivenLiters)}`}
+                  </span>
+                )}
               </div>
               <div
                 data-testid="pump-watering-logic"
