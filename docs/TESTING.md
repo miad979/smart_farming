@@ -18,7 +18,7 @@ It includes:
 - Active branch protection required check: required-ui-smoke
 - Runtime model: full Node runtime (frontend + backend API + realtime)
 - Latest verified deployment automation commit: b47edfb
-- Last documentation refresh date: 2026-04-14
+- Last documentation refresh date: 2026-04-15
 
 ## 3) Testing Scope
 
@@ -91,7 +91,17 @@ npm run test:ui:mobile
 npm run test:load
 ```
 
-7. Production environment guard
+7. Optional local PostgreSQL snapshot table view
+```bash
+npm run db:table
+```
+
+7.1 Optional local PostgreSQL CSV export (Excel-friendly)
+```bash
+npm run db:csv
+```
+
+8. Production environment guard
 ```bash
 # PowerShell
 $env:NODE_ENV='production'
@@ -101,7 +111,7 @@ $env:MARKET_VOLATILITY_PROFILE='balanced'
 node server/check-production-env.cjs
 ```
 
-8. Final git and CI confirmation
+9. Final git and CI confirmation
 - ensure clean or intentional git diff
 - ensure required checks are green on pushed commit
 
@@ -435,9 +445,54 @@ Result:
   - npm run test:ui: pass (5/5)
   - no diagnostics errors in modified files
 
-  ## 7A) Requested Full Testing Matrix Update (2026-04-15)
+### Phase K: Supabase SQL snapshot workflow + bootstrap source correction
+- Date: 2026-04-15
+- Commits:
+  - `2176efd` (Supabase runtime connection workflow and env shortcuts)
+  - `3ccf1ba` (bootstrap source freshness fix)
+- Summary:
+  - added one-command Supabase snapshot connector and env-based DB URL shortcuts
+  - added SQL SSL auto-detection for Supabase hosts
+  - corrected startup source selection so SQL snapshot can be used when it is fresher than local JSON
+- Key modified files:
+  - server/connect-supabase.cjs
+  - server/local-api.cjs
+  - server/sync-sql-snapshot.cjs
+  - server/ensure-local-postgres.cjs
+  - package.json
+  - .env.example
+  - .env.production.example
+  - README.md
+  - BACKEND_SETUP.md
+- Validation:
+  - `npm run connect:supabase`: PASS (snapshot sync completed)
+  - `npm run build`: PASS
+  - live health check (`/api/health`):
+    - `sqlConfigured: true`
+    - `sqlConnected: true`
+    - `bootstrapSource: sql-snapshot`
+  - focused UI smoke (`farmer can use dashboard, disease, and irrigation routes`): PASS
 
-  This section records the exact testing titles requested and the current execution status in this workspace.
+### Phase L: Local PostgreSQL table formatter + CSV export tooling
+- Date: 2026-04-15
+- Commit: pending
+- Summary:
+  - added local snapshot table viewer command (`db:table`)
+  - upgraded output to fixed-width structured tables to prevent terminal wrap corruption
+  - added CSV export mode (single table or multi-table folder export)
+- Key modified files:
+  - server/show-local-postgres-table.cjs
+  - package.json
+  - docs/TESTING.md
+- Validation:
+  - `npm run db:table -- --table users --limit 8`: PASS (readable fixed-width output)
+  - `npm run db:table -- --table users --columns id,name,role,email,lastSeen --csv temp-db-export-users.csv`: PASS (30-row CSV generated)
+  - `npm run db:csv`: PASS (multi-table CSV files exported under `local-db-export/`)
+  - temporary CSV preview checked and cleanup completed
+
+## 7A) Requested Full Testing Matrix Update (2026-04-15)
+
+This section records the exact testing titles requested and the current execution status in this workspace.
 
   ### Unit Testing
   - Status: Not available as a dedicated standalone suite in this repository.
@@ -665,6 +720,38 @@ Additional full-pass execution was completed after the matrix update to confirm 
 - First attempt: expected FAIL due short test secret (< 32 chars).
 - Re-run with valid secret length: PASS (`[env] Production environment check passed.`).
 
+## 7C) Local PostgreSQL Snapshot Visibility Run (2026-04-15)
+
+This run validates structured local table visibility and CSV export for snapshot-backed app data.
+
+### Structured terminal table rendering
+- Command: `npm run db:table -- --table users --limit 8`
+- Result: PASS
+- Evidence:
+  - fixed-width row rendering preserved alignment in PowerShell
+  - long values truncated safely without breaking table borders
+
+### Column-scoped readability check
+- Command: `npm run db:table -- --table users --columns id,name,role,email,lastSeen`
+- Result: PASS
+- Evidence:
+  - default preview shows 20 rows
+  - high-signal columns remained readable without horizontal corruption
+
+### CSV export (Excel-friendly)
+- Command: `npm run db:table -- --table users --columns id,name,role,email,lastSeen --csv temp-db-export-users.csv`
+- Result: PASS
+- Evidence:
+  - CSV created with 30 rows
+  - header + sample rows validated from terminal preview
+  - temporary validation CSV cleaned up after check
+
+### Bulk CSV export helper
+- Command: `npm run db:csv`
+- Result: PASS
+- Output pattern:
+  - exported files generated under `local-db-export/` (e.g., `users.csv`, `irrigation.csv`, `consultations.csv`)
+
 ## 8) What Was Modified to Improve Testability
 
 ### Test infrastructure
@@ -678,6 +765,10 @@ Additional full-pass execution was completed after the matrix update to confirm 
 
 ### Reliability
 - Reduced local startup brittleness in postgres preflight.
+
+### Local data observability
+- Added `server/show-local-postgres-table.cjs` for structured snapshot-table visibility.
+- Added `npm run db:table` and `npm run db:csv` for repeatable local data inspection and export.
 
 ### Deployment safety
 - Added strict production startup guard for AUTH_TOKEN_SECRET and CORS_ALLOWED_ORIGINS.
@@ -762,6 +853,8 @@ Run immediately after deployment:
 | DEF-001 | Required check context mismatch | Merge blocked incorrectly | Standardized to required-ui-smoke | Closed |
 | DEF-002 | Local postgres readiness hard-fail | Local dev startup instability | Made check non-fatal by default; strict mode optional | Closed |
 | DEF-003 | Runtime deployment without env guard risk | Production auth/cors misconfiguration risk | Added server/check-production-env.cjs and enforced production secret requirement | Closed |
+| DEF-004 | SQL connected but startup source remained local-json | Supabase-backed runtime validation mismatch | Added SQL snapshot freshness comparison in startup bootstrap selection | Closed |
+| DEF-005 | Local snapshot table output wrapped and appeared broken | Data review friction in terminal | Replaced raw wide console table dumps with fixed-width structured rendering + column filters | Closed |
 
 ## 13) Artifacts and Evidence
 
@@ -773,6 +866,9 @@ Store or review artifacts from:
   - Security CI
   - UI Smoke CI
   - Deploy Runtime (Render)
+- Local DB evidence:
+  - terminal output from `npm run db:table`
+  - CSV exports from `npm run db:csv` (folder: `local-db-export/`)
 
 ## 14) Maintenance Process for This Document
 
@@ -811,12 +907,14 @@ npm run test:load
 npm run secret:auth
 npm run demo:free
 npm run demo:free:skip-build
+npm run db:table
+npm run db:csv
 node server/check-production-env.cjs
 ```
 
 ---
 
-Document version: 2.7
+Document version: 2.8
 Status: Active and maintained
 Last updated: 2026-04-15
 Owner: Engineering / QA

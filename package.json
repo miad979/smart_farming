@@ -24,6 +24,8 @@
     "demo:free:skip-build": "node server/start-free-demo.cjs --skip-build",
     "sync:sql": "node server/sync-sql-snapshot.cjs",
     "sync:postgres": "node server/sync-sql-snapshot.cjs",
+    "db:table": "node server/show-local-postgres-table.cjs",
+    "db:csv": "node server/show-local-postgres-table.cjs --all --csv local-db-export",
     "connect:supabase": "node server/connect-supabase.cjs",
     "start": "npm run dev",
     "verify": "node --version && npm --version && echo '✅ System ready!'"
