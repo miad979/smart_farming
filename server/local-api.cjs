@@ -821,7 +821,7 @@ function normalizeMaxCycleMinutes(value) {
   return Math.max(1, Math.min(120, Math.round(parsed)))
 }
 
-function applyPumpCapacityForCycle({ targetLiters, pumpCapacityLpm, maxCycleMinutes }) {
+function applyPumpCapacityForCycle({ targetLiters, pumpCapacityLpm, maxCycleMinutes, respectCycleLimit = true }) {
   const safeTarget = Math.max(0, Number(targetLiters || 0))
   const safeCapacity = Math.max(1, Number(pumpCapacityLpm || 1))
   const safeMaxCycleMinutes = Math.max(1, Number(maxCycleMinutes || 1))
@@ -837,7 +837,7 @@ function applyPumpCapacityForCycle({ targetLiters, pumpCapacityLpm, maxCycleMinu
 
   const flowPerSecond = safeCapacity / 60
   const requiredSeconds = safeTarget / flowPerSecond
-  const allowedSeconds = safeMaxCycleMinutes * 60
+  const allowedSeconds = respectCycleLimit ? (safeMaxCycleMinutes * 60) : requiredSeconds
   const runtimeSeconds = Math.max(1, Math.ceil(Math.min(requiredSeconds, allowedSeconds)))
   const deliveredLiters = Math.max(1, Math.round(flowPerSecond * runtimeSeconds))
   const appliedLiters = Math.min(safeTarget, deliveredLiters)
@@ -846,7 +846,7 @@ function applyPumpCapacityForCycle({ targetLiters, pumpCapacityLpm, maxCycleMinu
     targetLiters: safeTarget,
     appliedLiters,
     runtimeSeconds,
-    cappedByCycle: requiredSeconds > allowedSeconds,
+    cappedByCycle: respectCycleLimit && (requiredSeconds > allowedSeconds),
   }
 }
 
@@ -951,6 +951,10 @@ function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
   const maxCycleMinutes = normalizeMaxCycleMinutes(schedule?.policy?.maxCycleMinutes)
   const forcePump = normalizeForcedPumpAction(options?.forcePump)
   const requestedLiters = Number(options?.manualLiters || 0)
+  const requestedRuntimeMinutes = Number(options?.manualRuntimeMinutes || 0)
+  const safeRequestedRuntimeMinutes = Number.isFinite(requestedRuntimeMinutes)
+    ? Math.max(0, Math.round(requestedRuntimeMinutes))
+    : 0
   const safeRequestedLiters = Number.isFinite(requestedLiters) ? requestedLiters : 0
   const nextSchedule = { ...schedule, moisture: measuredMoisture, alerts: [] }
   let action = 'idle'
@@ -961,14 +965,18 @@ function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
 
   if (forcePump === 'on') {
     const fallbackManualLiters = Math.max(1, Math.round(45 * landAreaAcres))
-    targetLiters = Math.min(maxVolume, Math.max(1, safeRequestedLiters || fallbackManualLiters))
+    const manualUpperBound = Math.max(50000, Math.round(maxVolume * 1000))
+    targetLiters = Math.min(manualUpperBound, Math.max(1, Math.round(safeRequestedLiters || fallbackManualLiters)))
     const cycle = applyPumpCapacityForCycle({
       targetLiters,
       pumpCapacityLpm,
       maxCycleMinutes,
+      respectCycleLimit: false,
     })
+    const logicalRuntimeSeconds = Number(cycle.runtimeSeconds || 0)
+    const minimumRuntimeSeconds = Math.max(0, safeRequestedRuntimeMinutes * 60)
     appliedLiters = cycle.appliedLiters
-    runtimeSeconds = cycle.runtimeSeconds
+    runtimeSeconds = Math.max(logicalRuntimeSeconds, minimumRuntimeSeconds)
     const moistureLift = Math.max(6, Math.round(appliedLiters * 0.35))
     nextSchedule.moisture = Math.min(95, measuredMoisture + moistureLift)
     nextSchedule.amount = `${appliedLiters}L`
@@ -1006,6 +1014,7 @@ function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
       targetLiters,
       pumpCapacityLpm,
       maxCycleMinutes,
+      respectCycleLimit: false,
     })
     appliedLiters = cycle.appliedLiters
     runtimeSeconds = cycle.runtimeSeconds
@@ -5077,6 +5086,10 @@ function createLocalApiMiddleware() {
         const manualLiters = Number.isFinite(manualLitersInput)
           ? Math.max(1, Math.round(manualLitersInput))
           : undefined
+        const manualRuntimeMinutesInput = Number(body?.manualRuntimeMinutes)
+        const manualRuntimeMinutes = Number.isFinite(manualRuntimeMinutesInput)
+          ? Math.max(1, Math.round(manualRuntimeMinutesInput))
+          : undefined
 
         const scheduleWithPolicy = {
           ...existingSchedule,
@@ -5098,7 +5111,7 @@ function createLocalApiMiddleware() {
         const { schedule, action, appliedLiters, runtimeSeconds, targetLiters, pumpCapacityLpm, reason } = runAutoIrrigationDecision(
           scheduleWithPolicy,
           measuredMoisture,
-          { forcePump, manualLiters },
+          { forcePump, manualLiters, manualRuntimeMinutes },
         )
 
         // Keep critical control settings from the latest persisted schedule so sensor ticks
@@ -5168,6 +5181,7 @@ function createLocalApiMiddleware() {
             measuredMoisture,
             forcePump: forcePump || 'auto',
             manualLiters: typeof manualLiters === 'number' ? manualLiters : null,
+            manualRuntimeMinutes: typeof manualRuntimeMinutes === 'number' ? manualRuntimeMinutes : null,
           },
           message: reason,
         })

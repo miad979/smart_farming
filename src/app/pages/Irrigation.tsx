@@ -374,6 +374,7 @@ export const Irrigation: React.FC = () => {
   const pumpIsActive = useMemo(() => {
     const actuatorState = String(virtualDevice?.actuatorState || '').toLowerCase();
     if (actuatorState === 'watering' || actuatorState === 'on') return true;
+    if (actuatorState === 'idle' || actuatorState === 'off') return false;
     return latestSensorTick?.action === 'watering';
   }, [virtualDevice?.actuatorState, latestSensorTick?.action]);
 
@@ -625,6 +626,7 @@ export const Irrigation: React.FC = () => {
 
   useEffect(() => {
     if (!autoMode || state.userMode === 'guest' || !state.accessToken) return;
+    if (String(virtualDevice?.actuatorState || '').toLowerCase() === 'watering') return;
 
     const sensedMoisture = Number(virtualDevice?.telemetry?.soilMoisture);
     if (!Number.isFinite(sensedMoisture)) return;
@@ -636,12 +638,20 @@ export const Irrigation: React.FC = () => {
     void simulateVirtualTick(data.policy?.crop || 'Rice', {
       measuredMoisture: sensedMoisture,
     });
-  }, [autoMode, state.userMode, state.accessToken, data.policy?.crop, virtualDevice?.telemetry?.soilMoisture]);
+  }, [
+    autoMode,
+    state.userMode,
+    state.accessToken,
+    data.policy?.crop,
+    virtualDevice?.actuatorState,
+    virtualDevice?.telemetry?.soilMoisture,
+  ]);
 
   useEffect(() => {
     if (!autoMode || !autoSimulation || state.userMode === 'guest' || !state.accessToken) return;
     lastRealtimeAutoTickAtRef.current = Date.now();
     const timer = setInterval(() => {
+      if (String(virtualDevice?.actuatorState || '').toLowerCase() === 'watering') return;
       const sensedMoisture = Number(virtualDevice?.telemetry?.soilMoisture ?? data.moisture);
       void simulateVirtualTick(
         data.policy?.crop || 'Rice',
@@ -657,8 +667,27 @@ export const Irrigation: React.FC = () => {
     data.policy?.crop,
     data.moisture,
     virtualDevice?.id,
+    virtualDevice?.actuatorState,
     virtualDevice?.telemetry?.soilMoisture,
   ]);
+
+  useEffect(() => {
+    if (!pumpIsActive || currentRuntimeSeconds <= 0) return;
+
+    const timer = setTimeout(() => {
+      setVirtualDevice((prev) => (prev ? { ...prev, actuatorState: 'idle' } : prev));
+      setLastPumpSimulation((prev) => {
+        if (!prev || prev.action !== 'watering') return prev;
+        return {
+          ...prev,
+          action: 'idle',
+          message: lang === 'bn' ? 'পাম্প সাইকেল সম্পন্ন' : 'Pump cycle completed',
+        };
+      });
+    }, Math.max(1000, currentRuntimeSeconds * 1000));
+
+    return () => clearTimeout(timer);
+  }, [pumpIsActive, currentRuntimeSeconds, latestSensorTick?.id, lastPumpSimulation?.targetLiters, lang]);
 
   useEffect(() => {
     if (!pumpIsActive) {
@@ -755,9 +784,12 @@ export const Irrigation: React.FC = () => {
 
   const waterNow = async () => {
     const maxVolume = Math.max(1, Number(data.policy?.maxVolume || 150));
-    const absoluteMaxLiters = maxVolume * 10; // Allow up to 10x the policy max
+    const absoluteMaxLiters = Math.max(50000, maxVolume * 1000);
     const manualLiters = Math.max(1, Math.min(absoluteMaxLiters, Math.round(Number(manualPumpLiters || 45))));
-    const runtimeMinutes = Math.max(1, Math.min(120, Math.round(Number(manualPumpRuntimeMinutes || 2))));
+    const logicalRuntimeSeconds = Math.max(1, Math.ceil((manualLiters / Math.max(1, pumpCapacityLpm)) * 60));
+    const minimumRuntimeSeconds = Math.max(60, Math.round(Number(manualPumpRuntimeMinutes || 2) * 60));
+    const effectiveRuntimeSeconds = Math.max(logicalRuntimeSeconds, minimumRuntimeSeconds);
+    const runtimeMinutes = Math.max(1, Math.ceil(effectiveRuntimeSeconds / 60));
 
     // Show immediate intent in UI so manual action feels responsive.
     setData((prev) => ({
@@ -767,9 +799,11 @@ export const Irrigation: React.FC = () => {
     setVirtualDevice((prev) => (prev ? { ...prev, actuatorState: 'watering' } : prev));
     setLastPumpSimulation({
       action: 'watering',
-      message: lang === 'bn' ? `${runtimeMinutes} মিনিটের জন্য ম্যানুয়াল ওয়াটারিং শুরু` : `Manual watering for ${runtimeMinutes} min`,
+      message: lang === 'bn' ? `${runtimeMinutes} মিনিটের লজিক্যাল সেচ শুরু` : `Logical watering started for ${runtimeMinutes} min`,
       appliedLiters: manualLiters,
-      runtimeSeconds: runtimeMinutes * 60,
+      runtimeSeconds: effectiveRuntimeSeconds,
+      targetLiters: manualLiters,
+      pumpCapacityLpm,
     });
 
     if (state.userMode === 'guest' || !state.accessToken || !state.user.id) {
@@ -783,9 +817,11 @@ export const Irrigation: React.FC = () => {
       }));
       setLastPumpSimulation({
         action: 'watering',
-        message: lang === 'bn' ? `${runtimeMinutes} মিনিটের জন্য ম্যানুয়াল ওয়াটারিং সম্পূর্ণ` : `Manual watering completed for ${runtimeMinutes} min`,
+        message: lang === 'bn' ? `${runtimeMinutes} মিনিটের লজিক্যাল সেচ সম্পূর্ণ` : `Logical watering completed for ${runtimeMinutes} min`,
         appliedLiters: manualLiters,
-        runtimeSeconds: runtimeMinutes * 60,
+        runtimeSeconds: effectiveRuntimeSeconds,
+        targetLiters: manualLiters,
+        pumpCapacityLpm,
       });
       setLastUpdated(new Date());
       return;
@@ -916,11 +952,16 @@ export const Irrigation: React.FC = () => {
   };
 
   const forcePumpOnSimulation = async () => {
-    const runtimeMinutes = Math.max(1, Math.min(120, Math.round(Number(manualPumpRuntimeMinutes || 2))));
+    const maxVolume = Math.max(1, Number(data.policy?.maxVolume || 150));
+    const cap = Math.max(50000, maxVolume * 1000);
+    const safeManualLiters = Math.max(1, Math.min(cap, Math.round(Number(manualPumpLiters || 0))));
+    const logicalRuntimeSeconds = Math.max(1, Math.ceil((safeManualLiters / Math.max(1, pumpCapacityLpm)) * 60));
+    const minimumRuntimeSeconds = Math.max(60, Math.round(Number(manualPumpRuntimeMinutes || 2) * 60));
+    const runtimeMinutes = Math.max(1, Math.ceil(Math.max(logicalRuntimeSeconds, minimumRuntimeSeconds) / 60));
     await simulateVirtualTick(data.policy?.crop || 'Rice', {
       measuredMoisture: simulatedMoistureInput,
       forcePump: 'on',
-      manualLiters: manualPumpLiters,
+      manualLiters: safeManualLiters,
       manualRuntimeMinutes: runtimeMinutes,
     });
   };
@@ -1330,10 +1371,10 @@ export const Irrigation: React.FC = () => {
                 data-testid="pump-sim-liters-input"
                 type="number"
                 min={1}
-                max={Number(data.policy?.maxVolume || 150) * 10}
+                max={Math.max(50000, Number(data.policy?.maxVolume || 150) * 1000)}
                 value={manualPumpLiters}
                 onChange={(e) => {
-                  const cap = Number(data.policy?.maxVolume || 150) * 10;
+                  const cap = Math.max(50000, Number(data.policy?.maxVolume || 150) * 1000);
                   const next = Math.round(Number(e.target.value || 0));
                   setManualPumpLiters(Math.max(1, Math.min(cap, next)));
                 }}
@@ -1479,10 +1520,10 @@ export const Irrigation: React.FC = () => {
               data-testid="manual-water-amount-input"
               type="number"
               min={1}
-              max={Number(data.policy?.maxVolume || 150) * 10}
+              max={Math.max(50000, Number(data.policy?.maxVolume || 150) * 1000)}
               value={manualPumpLiters}
               onChange={(e) => {
-                const cap = Number(data.policy?.maxVolume || 150) * 10;
+                const cap = Math.max(50000, Number(data.policy?.maxVolume || 150) * 1000);
                 const next = Math.round(Number(e.target.value || 0));
                 setManualPumpLiters(Math.max(1, Math.min(cap, next)));
               }}

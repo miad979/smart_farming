@@ -891,6 +891,7 @@ export async function simulateVirtualIrrigationTick(
     measuredMoisture?: number;
     forcePump?: 'on' | 'off';
     manualLiters?: number;
+    manualRuntimeMinutes?: number;
   },
 ) {
   const response = await fetch(`${API_BASE_URL}/devices/${encodeURIComponent(deviceId)}/simulate`, {
