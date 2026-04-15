@@ -892,6 +892,7 @@ export async function simulateVirtualIrrigationTick(
     forcePump?: 'on' | 'off';
     manualLiters?: number;
     manualRuntimeMinutes?: number;
+    tickMode?: 'decision' | 'sensor-only';
   },
 ) {
   const response = await fetch(`${API_BASE_URL}/devices/${encodeURIComponent(deviceId)}/simulate`, {

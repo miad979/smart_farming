@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { t } from '../utils/translations';
 import { Droplets, Power, AlertCircle, Settings, Play, Loader2, Cpu, Activity, PhoneCall } from 'lucide-react';
@@ -116,6 +116,16 @@ type PumpSimulationResult = {
   pumpCapacityLpm?: number;
 };
 
+type NotificationTone = 'info' | 'success' | 'warning';
+
+type NotificationItem = {
+  id: string;
+  key: string;
+  message: string;
+  tone: NotificationTone;
+  createdAt: number;
+};
+
 const CROP_PROFILES: Record<string, { crop_bn: string; threshold: number; maxVolume: number }> = {
   Rice: { crop_bn: 'ধান', threshold: 65, maxVolume: 150 },
   Wheat: { crop_bn: 'গম', threshold: 55, maxVolume: 110 },
@@ -153,8 +163,11 @@ export const Irrigation: React.FC = () => {
   const [animatedWaterGivenLiters, setAnimatedWaterGivenLiters] = useState(0);
   const [etaNowMs, setEtaNowMs] = useState(() => Date.now());
   const [wateringSessionStartedAtMs, setWateringSessionStartedAtMs] = useState<number | null>(null);
+  const [notificationFeed, setNotificationFeed] = useState<NotificationItem[]>([]);
   const lastRealtimeAutoTickAtRef = useRef(0);
   const autoTickInFlightRef = useRef(false);
+  const notificationCounterRef = useRef(0);
+  const lastPumpNotificationKeyRef = useRef('');
 
   const normalizeAlarmTickThreshold = (value: unknown) => {
     const parsed = Number(value);
@@ -224,6 +237,80 @@ export const Irrigation: React.FC = () => {
     return `${secs}s`;
   };
 
+  const getNotificationToneFromMessage = useCallback((message: string): NotificationTone => {
+    const normalized = String(message || '').toLowerCase();
+    if (
+      normalized.includes('alarm')
+      || normalized.includes('failed')
+      || normalized.includes('error')
+      || normalized.includes('offline')
+      || normalized.includes('deficit')
+      || normalized.includes('warning')
+    ) {
+      return 'warning';
+    }
+    if (
+      normalized.includes('watering')
+      || normalized.includes('applied')
+      || normalized.includes('delivered')
+      || normalized.includes('started')
+      || normalized.includes('completed')
+      || normalized.includes('success')
+    ) {
+      return 'success';
+    }
+    return 'info';
+  }, []);
+
+  const pushNotification = useCallback((key: string, message: string, tone: NotificationTone = 'info') => {
+    const normalizedMessage = String(message || '').trim();
+    if (!normalizedMessage) return;
+
+    const now = Date.now();
+    setNotificationFeed((prev) => {
+      const duplicateIndex = prev.findIndex((entry) => entry.key === key && (now - entry.createdAt) < 30000);
+      if (duplicateIndex >= 0) {
+        const updated = [...prev];
+        updated[duplicateIndex] = {
+          ...updated[duplicateIndex],
+          message: normalizedMessage,
+          tone,
+          createdAt: now,
+        };
+        return updated;
+      }
+
+      notificationCounterRef.current += 1;
+      const next: NotificationItem = {
+        id: `notification-${now}-${notificationCounterRef.current}`,
+        key,
+        message: normalizedMessage,
+        tone,
+        createdAt: now,
+      };
+      return [next, ...prev].slice(0, 8);
+    });
+  }, []);
+
+  const formatNotificationAge = useCallback((createdAt: number) => {
+    const diffSeconds = Math.max(0, Math.floor((Date.now() - createdAt) / 1000));
+    if (lang === 'bn') {
+      if (diffSeconds < 10) return 'এইমাত্র';
+      if (diffSeconds < 60) return `${diffSeconds} সেকেন্ড আগে`;
+      const minutes = Math.floor(diffSeconds / 60);
+      if (minutes < 60) return `${minutes} মিনিট আগে`;
+      const hours = Math.floor(minutes / 60);
+      return `${hours} ঘণ্টা আগে`;
+    }
+
+    if (diffSeconds < 10) return 'just now';
+    if (diffSeconds < 60) return `${diffSeconds}s ago`;
+    const minutes = Math.floor(diffSeconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ago`;
+  }, [lang]);
+
   const normalizeSchedulePolicy = (schedule: any) => {
     if (!schedule) return schedule;
     const cropName = String(schedule?.policy?.crop || 'Rice');
@@ -285,7 +372,13 @@ export const Irrigation: React.FC = () => {
 
   const simulateVirtualTick = async (
     cropName?: string,
-    options?: { measuredMoisture?: number; forcePump?: 'on' | 'off'; manualLiters?: number },
+    options?: {
+      measuredMoisture?: number;
+      forcePump?: 'on' | 'off';
+      manualLiters?: number;
+      manualRuntimeMinutes?: number;
+      tickMode?: 'decision' | 'sensor-only';
+    },
   ) => {
     if (state.userMode === 'guest' || !state.accessToken) return;
     let device = virtualDevice;
@@ -305,6 +398,10 @@ export const Irrigation: React.FC = () => {
         ...(typeof options?.manualLiters === 'number'
           ? { manualLiters: Math.max(1, Math.round(options.manualLiters)) }
           : {}),
+        ...(typeof options?.manualRuntimeMinutes === 'number'
+          ? { manualRuntimeMinutes: Math.max(1, Math.round(options.manualRuntimeMinutes)) }
+          : {}),
+        ...(options?.tickMode ? { tickMode: options.tickMode } : {}),
       });
       if (typeof result?.helpLineNumber === 'string' && result.helpLineNumber.trim()) {
         setDeviceHelpLineNumber(result.helpLineNumber.trim());
@@ -676,6 +773,41 @@ export const Irrigation: React.FC = () => {
 
     return unsubscribe;
   }, [state.user.id, state.userMode]);
+
+  useEffect(() => {
+    const alerts = Array.isArray(data.alerts) ? data.alerts : [];
+    if (!alerts.length) return;
+
+    alerts.forEach((alert: any, idx: number) => {
+      const keyBase = String(alert?.message || alert?.message_bn || `alert-${idx}`).trim();
+      const message = String((lang === 'bn' ? alert?.message_bn : alert?.message) || keyBase).trim();
+      pushNotification(`schedule-alert:${keyBase}`, message, getNotificationToneFromMessage(message));
+    });
+  }, [data.alerts, lang, pushNotification, getNotificationToneFromMessage]);
+
+  useEffect(() => {
+    const message = String(lastPumpSimulation?.message || '').trim();
+    if (!message) return;
+
+    const action = String(lastPumpSimulation?.action || 'idle').toLowerCase();
+    const liters = Math.max(0, Math.round(Number(lastPumpSimulation?.appliedLiters || 0)));
+    const enrichedMessage = liters > 0 ? `${message} (${liters}L)` : message;
+    const notificationKey = `pump:${action}:${message}:${liters}`;
+
+    if (lastPumpNotificationKeyRef.current === notificationKey) return;
+    lastPumpNotificationKeyRef.current = notificationKey;
+
+    const tone: NotificationTone = action === 'watering'
+      ? 'success'
+      : (action === 'idle' ? 'info' : getNotificationToneFromMessage(enrichedMessage));
+    pushNotification(notificationKey, enrichedMessage, tone);
+  }, [
+    lastPumpSimulation?.message,
+    lastPumpSimulation?.action,
+    lastPumpSimulation?.appliedLiters,
+    pushNotification,
+    getNotificationToneFromMessage,
+  ]);
 
   useEffect(() => {
     if (!autoMode || state.userMode === 'guest' || !state.accessToken) return;
@@ -1260,7 +1392,7 @@ export const Irrigation: React.FC = () => {
         <div className="flex flex-wrap gap-3">
           <button
             type="button"
-            onClick={() => void simulateVirtualTick(data.policy?.crop || 'Rice')}
+            onClick={() => void simulateVirtualTick(data.policy?.crop || 'Rice', { tickMode: 'sensor-only' })}
             disabled={simulating || saving}
             className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-white font-semibold hover:bg-indigo-700 disabled:opacity-60"
           >
@@ -1628,12 +1760,35 @@ export const Irrigation: React.FC = () => {
         </div>
       </div>
 
-      {(data.alerts || []).map((alert: any, idx: number) => (
-        <div key={idx} className="flex gap-3 p-5 bg-gradient-to-r from-blue-50 to-blue-100 border-l-4 border-blue-500 rounded-xl shadow-sm">
-          <AlertCircle className="w-6 h-6 text-blue-600 flex-shrink-0 mt-0.5" />
-          <p className="text-sm text-blue-900 font-medium">{lang === 'bn' ? alert.message_bn : alert.message}</p>
+      {notificationFeed.length > 0 && (
+        <div className="space-y-2">
+          {notificationFeed.map((notification) => {
+            const toneClass = notification.tone === 'warning'
+              ? 'from-amber-50 to-amber-100 border-amber-500 text-amber-900'
+              : (notification.tone === 'success'
+                ? 'from-emerald-50 to-emerald-100 border-emerald-500 text-emerald-900'
+                : 'from-blue-50 to-blue-100 border-blue-500 text-blue-900');
+            const iconClass = notification.tone === 'warning'
+              ? 'text-amber-600'
+              : (notification.tone === 'success' ? 'text-emerald-600' : 'text-blue-600');
+
+            return (
+              <div
+                key={notification.id}
+                className={`flex items-start justify-between gap-3 rounded-xl border-l-4 bg-gradient-to-r p-4 shadow-sm ${toneClass}`}
+              >
+                <div className="flex gap-3">
+                  <AlertCircle className={`mt-0.5 h-5 w-5 flex-shrink-0 ${iconClass}`} />
+                  <p className="text-sm font-medium">{notification.message}</p>
+                </div>
+                <span className="whitespace-nowrap text-[11px] opacity-75">
+                  {formatNotificationAge(notification.createdAt)}
+                </span>
+              </div>
+            );
+          })}
         </div>
-      ))}
+      )}
 
       {yieldAdvice && (
         <div className="bg-white rounded-xl shadow-sm p-6 border-2 border-emerald-100">

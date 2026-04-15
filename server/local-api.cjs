@@ -937,6 +937,12 @@ function normalizeForcedPumpAction(value) {
   return null
 }
 
+function normalizeSimulationTickMode(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'sensor-only') return 'sensor-only'
+  return 'decision'
+}
+
 function normalizeAlarmTickThreshold(value) {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return 3
@@ -949,6 +955,7 @@ function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
   const landAreaAcres = normalizeLandAreaAcres(schedule?.policy?.landAreaAcres ?? 1)
   const pumpCapacityLpm = normalizePumpCapacityLpm(schedule?.policy?.pumpCapacityLpm, landAreaAcres)
   const maxCycleMinutes = normalizeMaxCycleMinutes(schedule?.policy?.maxCycleMinutes)
+  const tickMode = normalizeSimulationTickMode(options?.tickMode)
   const forcePump = normalizeForcedPumpAction(options?.forcePump)
   const requestedLiters = Number(options?.manualLiters || 0)
   const requestedRuntimeMinutes = Number(options?.manualRuntimeMinutes || 0)
@@ -1005,6 +1012,13 @@ function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
     ]
     action = 'idle'
     reason = 'Virtual pump forced OFF for simulation'
+  } else if (tickMode === 'sensor-only') {
+    nextSchedule.amount = nextSchedule.amount || '0L'
+    nextSchedule.nextWatering = nextSchedule.nextWatering || 'Sensor-only tick captured'
+    nextSchedule.nextWatering_bn = nextSchedule.nextWatering_bn || 'শুধু সেন্সর টিক রেকর্ড হয়েছে'
+    nextSchedule.alerts = []
+    action = 'idle'
+    reason = 'Sensor-only random tick processed (pump unchanged)'
   } else if (nextSchedule.autoMode && measuredMoisture < threshold) {
     const deficit = threshold - measuredMoisture
     const minAutoLiters = Math.max(1, Math.round(20 * landAreaAcres))
@@ -5090,6 +5104,7 @@ function createLocalApiMiddleware() {
         const manualRuntimeMinutes = Number.isFinite(manualRuntimeMinutesInput)
           ? Math.max(1, Math.round(manualRuntimeMinutesInput))
           : undefined
+        const tickMode = normalizeSimulationTickMode(body?.tickMode)
 
         const scheduleWithPolicy = {
           ...existingSchedule,
@@ -5111,7 +5126,7 @@ function createLocalApiMiddleware() {
         const { schedule, action, appliedLiters, runtimeSeconds, targetLiters, pumpCapacityLpm, reason } = runAutoIrrigationDecision(
           scheduleWithPolicy,
           measuredMoisture,
-          { forcePump, manualLiters, manualRuntimeMinutes },
+          { forcePump, manualLiters, manualRuntimeMinutes, tickMode },
         )
 
         // Keep critical control settings from the latest persisted schedule so sensor ticks
@@ -5182,6 +5197,7 @@ function createLocalApiMiddleware() {
             forcePump: forcePump || 'auto',
             manualLiters: typeof manualLiters === 'number' ? manualLiters : null,
             manualRuntimeMinutes: typeof manualRuntimeMinutes === 'number' ? manualRuntimeMinutes : null,
+            tickMode,
           },
           message: reason,
         })
