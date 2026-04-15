@@ -741,6 +741,24 @@ export const Irrigation: React.FC = () => {
   useEffect(() => {
     if (!pumpIsActive || currentRuntimeSeconds <= 0) return;
 
+    const elapsedSeconds = wateringSessionStartedAtMs
+      ? Math.max(0, Math.floor((Date.now() - wateringSessionStartedAtMs) / 1000))
+      : 0;
+    const remainingSeconds = Math.max(0, Math.ceil(currentRuntimeSeconds - elapsedSeconds));
+
+    if (remainingSeconds <= 0) {
+      setVirtualDevice((prev) => (prev ? { ...prev, actuatorState: 'idle' } : prev));
+      setLastPumpSimulation((prev) => {
+        if (!prev || prev.action !== 'watering') return prev;
+        return {
+          ...prev,
+          action: 'idle',
+          message: lang === 'bn' ? 'পাম্প সাইকেল সম্পন্ন' : 'Pump cycle completed',
+        };
+      });
+      return;
+    }
+
     const timer = setTimeout(() => {
       setVirtualDevice((prev) => (prev ? { ...prev, actuatorState: 'idle' } : prev));
       setLastPumpSimulation((prev) => {
@@ -751,10 +769,17 @@ export const Irrigation: React.FC = () => {
           message: lang === 'bn' ? 'পাম্প সাইকেল সম্পন্ন' : 'Pump cycle completed',
         };
       });
-    }, Math.max(1000, currentRuntimeSeconds * 1000));
+    }, Math.max(1000, remainingSeconds * 1000));
 
     return () => clearTimeout(timer);
-  }, [pumpIsActive, currentRuntimeSeconds, latestSensorTick?.id, lastPumpSimulation?.targetLiters, lang]);
+  }, [
+    pumpIsActive,
+    currentRuntimeSeconds,
+    wateringSessionStartedAtMs,
+    latestSensorTick?.id,
+    lastPumpSimulation?.targetLiters,
+    lang,
+  ]);
 
   useEffect(() => {
     if (!pumpIsActive) {
@@ -762,45 +787,36 @@ export const Irrigation: React.FC = () => {
       return;
     }
 
-    const targetLiters = Math.max(0, Math.round(Number(currentFlowLiters || 0)));
-    if (targetLiters <= 0) {
+    const targetLiters = Math.max(0, Math.round(Number(currentTargetLiters || currentFlowLiters || 0)));
+    const runtimeSeconds = Math.max(1, Math.round(Number(currentRuntimeSeconds || 0)));
+    if (targetLiters <= 0 || runtimeSeconds <= 0) {
       setAnimatedWaterGivenLiters(0);
       return;
     }
 
-    setAnimatedWaterGivenLiters(0);
-    const estimatedRuntimeSeconds = Math.max(
-      1,
-      Math.round(Number(currentRuntimeSeconds || Math.max(2, Math.round(flowPulseDuration * 2)))),
-    );
-    const tickMs = 200;
-    const estimatedTicks = Math.max(1, Math.ceil((estimatedRuntimeSeconds * 1000) / tickMs));
-    let stepLiters = Math.max(1, Math.ceil(targetLiters / estimatedTicks));
+    // For large sessions, keep displayed increments readable while preserving time alignment.
+    const incrementUnit = targetLiters >= 5000 ? 5 : (targetLiters >= 500 ? 2 : 1);
 
-    // Keep visible, human-friendly increments for large watering sessions (e.g., 5L, 10L, 15L...).
-    if (targetLiters >= 500) {
-      stepLiters = Math.max(5, Math.ceil(stepLiters / 5) * 5);
-    } else if (targetLiters >= 100) {
-      stepLiters = Math.max(2, Math.ceil(stepLiters / 2) * 2);
-    }
+    const updateProgressFromElapsed = () => {
+      const startMs = wateringSessionStartedAtMs || Date.now();
+      const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
+      const boundedElapsedSeconds = Math.min(runtimeSeconds, elapsedSeconds);
+      const rawDeliveredLiters = (targetLiters * boundedElapsedSeconds) / runtimeSeconds;
+      const quantizedDeliveredLiters = Math.floor(rawDeliveredLiters / incrementUnit) * incrementUnit;
+      const nextLiters = Math.min(targetLiters, Math.max(0, quantizedDeliveredLiters));
+      setAnimatedWaterGivenLiters(nextLiters);
+    };
 
-    const timer = setInterval(() => {
-      setAnimatedWaterGivenLiters((prev) => {
-        const next = Math.min(targetLiters, Math.round(prev) + stepLiters);
-        if (next >= targetLiters) {
-          clearInterval(timer);
-          return targetLiters;
-        }
-        return next;
-      });
-    }, tickMs);
+    updateProgressFromElapsed();
+    const timer = setInterval(updateProgressFromElapsed, 1000);
 
     return () => clearInterval(timer);
   }, [
     pumpIsActive,
+    currentTargetLiters,
     currentFlowLiters,
     currentRuntimeSeconds,
-    flowPulseDuration,
+    wateringSessionStartedAtMs,
     latestSensorTick?.id,
     latestSensorTick?.timestamp,
   ]);
