@@ -47,6 +47,27 @@ Behavior:
 - If PostgreSQL snapshot exists, the backend loads from PostgreSQL first.
 - If PostgreSQL is configured but empty, local `.local-db.json` is backfilled to PostgreSQL automatically.
 
+### Supabase Quick Connect
+
+Use Supabase PostgreSQL with either `DATABASE_URL` or these env vars:
+
+```bash
+SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+SUPABASE_DB_PASSWORD=your_database_password
+SQL_SSL=require
+```
+
+Then run:
+
+```bash
+npm run connect:supabase
+npm run dev
+```
+
+Notes:
+- `npm run connect:supabase` syncs the current `.local-db.json` snapshot into Supabase PostgreSQL.
+- Runtime automatically reads from Supabase PostgreSQL when configured.
+
 ## Local API Features
 
 - Email/password auth

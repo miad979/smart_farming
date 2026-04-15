@@ -2,9 +2,9 @@
 
 A Bengali-first smart farming platform with a fully local backend.
 
-## Local-Only Runtime
+## Local-First Runtime
 
-This project runs without Supabase.
+This project runs locally by default and can also connect to Supabase PostgreSQL.
 
 - Frontend: React + TypeScript + Vite
 - Backend: Local Node API at `server/local-api.cjs`
@@ -77,6 +77,23 @@ npm run sync:postgres
 3. Start the app normally:
 
 ```bash
+npm run dev
+```
+
+### Supabase PostgreSQL Quick Connect
+
+You can connect to Supabase with either a full `DATABASE_URL` or a simplified pair:
+
+```bash
+SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+SUPABASE_DB_PASSWORD=your_database_password
+SQL_SSL=require
+```
+
+Then sync current local data and start:
+
+```bash
+npm run connect:supabase
 npm run dev
 ```
 

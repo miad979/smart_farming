@@ -56,8 +56,42 @@ function loadEnvFiles() {
   loadEnvFromFile(localEnvPath)
 }
 
+function tryGetSupabaseProjectRef() {
+  const explicit = String(process.env.SUPABASE_PROJECT_REF || '').trim()
+  if (explicit) return explicit
+
+  const supabaseUrl = String(process.env.SUPABASE_URL || '').trim()
+  if (!supabaseUrl) return ''
+
+  try {
+    const hostname = new URL(supabaseUrl).hostname
+    return String(hostname.split('.')[0] || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+function getSupabaseDatabaseUrl() {
+  const explicit = String(process.env.SUPABASE_DB_URL || process.env.SUPABASE_DATABASE_URL || '').trim()
+  if (explicit) return explicit
+
+  const projectRef = tryGetSupabaseProjectRef()
+  const rawPassword = String(process.env.SUPABASE_DB_PASSWORD || '').trim()
+  if (!projectRef || !rawPassword) return ''
+
+  const password = encodeURIComponent(rawPassword)
+  return `postgresql://postgres:${password}@db.${projectRef}.supabase.co:5432/postgres`
+}
+
 function getDatabaseUrl() {
-  return (process.env.DATABASE_URL || process.env.POSTGRES_URL || '').trim()
+  return (process.env.DATABASE_URL || process.env.POSTGRES_URL || getSupabaseDatabaseUrl() || '').trim()
+}
+
+function shouldUseSqlSsl(databaseUrl) {
+  const sslMode = String(process.env.SQL_SSL || '').trim().toLowerCase()
+  if (sslMode === 'true' || sslMode === '1' || sslMode === 'require') return true
+  if (sslMode === 'false' || sslMode === '0' || sslMode === 'disable') return false
+  return /supabase\.co|pooler\.supabase\.com/i.test(String(databaseUrl || ''))
 }
 
 function getDatabaseUrlFromArgs(argv = []) {
@@ -119,12 +153,11 @@ async function run() {
 
   if (!databaseUrl) {
     throw new Error(
-      'DATABASE_URL (or POSTGRES_URL) is required. Set it in your shell/.env or pass --url "postgresql://..."',
+      'DATABASE_URL/POSTGRES_URL is missing. You can also set SUPABASE_DB_URL, or SUPABASE_URL + SUPABASE_DB_PASSWORD.',
     )
   }
 
-  const sslMode = (process.env.SQL_SSL || '').toLowerCase()
-  const useSsl = sslMode === 'true' || sslMode === '1' || sslMode === 'require'
+  const useSsl = shouldUseSqlSsl(databaseUrl)
 
   const pool = new Pool({
     connectionString: databaseUrl,

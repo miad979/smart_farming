@@ -36,6 +36,37 @@ function loadLocalEnvFiles() {
   loadEnvFromFile(path.resolve(process.cwd(), '.env.local'))
 }
 
+function tryGetSupabaseProjectRef() {
+  const explicit = String(process.env.SUPABASE_PROJECT_REF || '').trim()
+  if (explicit) return explicit
+
+  const supabaseUrl = String(process.env.SUPABASE_URL || '').trim()
+  if (!supabaseUrl) return ''
+
+  try {
+    const hostname = new URL(supabaseUrl).hostname
+    return String(hostname.split('.')[0] || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+function getSupabaseDatabaseUrl() {
+  const explicit = String(process.env.SUPABASE_DB_URL || process.env.SUPABASE_DATABASE_URL || '').trim()
+  if (explicit) return explicit
+
+  const projectRef = tryGetSupabaseProjectRef()
+  const rawPassword = String(process.env.SUPABASE_DB_PASSWORD || '').trim()
+  if (!projectRef || !rawPassword) return ''
+
+  const password = encodeURIComponent(rawPassword)
+  return `postgresql://postgres:${password}@db.${projectRef}.supabase.co:5432/postgres`
+}
+
+function getDatabaseUrl() {
+  return (process.env.DATABASE_URL || process.env.POSTGRES_URL || getSupabaseDatabaseUrl() || '').trim()
+}
+
 function runCommand(command, args) {
   return spawnSync(command, args, {
     encoding: 'utf8',
@@ -82,7 +113,7 @@ function main() {
     return
   }
 
-  const databaseUrl = (process.env.DATABASE_URL || process.env.POSTGRES_URL || '').trim()
+  const databaseUrl = getDatabaseUrl()
   const forceStart = isTruthy(process.env.LOCAL_POSTGRES_FORCE_START)
   const strictMode = isTruthy(process.env.LOCAL_POSTGRES_STRICT)
 
