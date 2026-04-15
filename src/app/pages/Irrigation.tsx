@@ -197,10 +197,11 @@ export const Irrigation: React.FC = () => {
   const formatWaterVolume = (litersValue: unknown) => {
     const liters = Math.max(0, Number(litersValue || 0));
     if (!Number.isFinite(liters)) return '0L';
+    const roundedLiters = Math.round(liters);
     if (liters >= 1000) {
-      return `${liters.toFixed(0)}L (${(liters / 1000).toFixed(2)} m3)`;
+      return `${roundedLiters}L (${(liters / 1000).toFixed(2)} m3)`;
     }
-    return `${liters.toFixed(liters >= 100 ? 0 : 1)}L`;
+    return `${roundedLiters}L`;
   };
 
   const normalizeSchedulePolicy = (schedule: any) => {
@@ -665,30 +666,48 @@ export const Irrigation: React.FC = () => {
       return;
     }
 
-    const targetLiters = Math.max(0, Number(currentFlowLiters || 0));
-    if (!Number.isFinite(targetLiters) || targetLiters <= 0) {
+    const targetLiters = Math.max(0, Math.round(Number(currentFlowLiters || 0)));
+    if (targetLiters <= 0) {
       setAnimatedWaterGivenLiters(0);
       return;
     }
 
     setAnimatedWaterGivenLiters(0);
-    const stepCount = Math.max(8, Math.round((flowPulseDuration * 1000) / 160));
-    const stepSize = targetLiters / stepCount;
-    let step = 0;
+    const estimatedRuntimeSeconds = Math.max(
+      1,
+      Math.round(Number(currentRuntimeSeconds || Math.max(2, Math.round(flowPulseDuration * 2)))),
+    );
+    const tickMs = 200;
+    const estimatedTicks = Math.max(1, Math.ceil((estimatedRuntimeSeconds * 1000) / tickMs));
+    let stepLiters = Math.max(1, Math.ceil(targetLiters / estimatedTicks));
+
+    // Keep visible, human-friendly increments for large watering sessions (e.g., 5L, 10L, 15L...).
+    if (targetLiters >= 500) {
+      stepLiters = Math.max(5, Math.ceil(stepLiters / 5) * 5);
+    } else if (targetLiters >= 100) {
+      stepLiters = Math.max(2, Math.ceil(stepLiters / 2) * 2);
+    }
+
     const timer = setInterval(() => {
-      step += 1;
       setAnimatedWaterGivenLiters((prev) => {
-        const next = prev + stepSize;
-        return next >= targetLiters ? targetLiters : next;
+        const next = Math.min(targetLiters, Math.round(prev) + stepLiters);
+        if (next >= targetLiters) {
+          clearInterval(timer);
+          return targetLiters;
+        }
+        return next;
       });
-      if (step >= stepCount) {
-        clearInterval(timer);
-        setAnimatedWaterGivenLiters(targetLiters);
-      }
-    }, 160);
+    }, tickMs);
 
     return () => clearInterval(timer);
-  }, [pumpIsActive, currentFlowLiters, flowPulseDuration, latestSensorTick?.id, latestSensorTick?.timestamp]);
+  }, [
+    pumpIsActive,
+    currentFlowLiters,
+    currentRuntimeSeconds,
+    flowPulseDuration,
+    latestSensorTick?.id,
+    latestSensorTick?.timestamp,
+  ]);
 
   const persistUpdates = async (updates: any) => {
     if (state.userMode === 'guest' || !state.accessToken || !state.user.id) {
@@ -1200,7 +1219,9 @@ export const Irrigation: React.FC = () => {
                   <div className="text-center">
                     <p className="text-xs font-bold text-blue-600 tracking-wide uppercase">Live Water Flow</p>
                     <p className="text-3xl font-bold text-blue-700 mt-2">
-                      {formatWaterVolume(cycleDisplayLiters)}
+                      {lang === 'bn'
+                        ? `Done ${formatWaterVolume(cycleDisplayLiters)} / ${formatWaterVolume(currentTargetLiters)}`
+                        : `Done ${formatWaterVolume(cycleDisplayLiters)} / ${formatWaterVolume(currentTargetLiters)}`}
                     </p>
                     <p className="text-sm text-blue-600 mt-1">
                       Target: {formatWaterVolume(currentTargetLiters)} | {((cycleDisplayLiters / Math.max(1, currentTargetLiters)) * 100).toFixed(1)}%
@@ -1247,8 +1268,8 @@ export const Irrigation: React.FC = () => {
                 >
                   {pumpIsActive && <Droplets className="w-5 h-5" />}
                   {lang === 'bn'
-                    ? `💧 ${formatWaterVolume(cycleDisplayLiters)} / ${formatWaterVolume(currentTargetLiters)}`
-                    : `💧 ${formatWaterVolume(cycleDisplayLiters)} / ${formatWaterVolume(currentTargetLiters)}`}
+                    ? `💧 Done ${formatWaterVolume(cycleDisplayLiters)} / ${formatWaterVolume(currentTargetLiters)}`
+                    : `💧 Done ${formatWaterVolume(cycleDisplayLiters)} / ${formatWaterVolume(currentTargetLiters)}`}
                 </span>
                 {!pumpIsActive && (
                   <span
