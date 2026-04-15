@@ -13,6 +13,7 @@ test-results/
 .local-uploads/
 .postgres-local/
 .tmp-detect-body.json
+local-db-export/
 
 # Environment files
 .env
