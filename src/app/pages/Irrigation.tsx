@@ -154,6 +154,7 @@ export const Irrigation: React.FC = () => {
   const [etaNowMs, setEtaNowMs] = useState(() => Date.now());
   const [wateringSessionStartedAtMs, setWateringSessionStartedAtMs] = useState<number | null>(null);
   const lastRealtimeAutoTickAtRef = useRef(0);
+  const autoTickInFlightRef = useRef(false);
 
   const normalizeAlarmTickThreshold = (value: unknown) => {
     const parsed = Number(value);
@@ -396,6 +397,20 @@ export const Irrigation: React.FC = () => {
     if (actuatorState === 'idle' || actuatorState === 'off') return false;
     return latestSensorTick?.action === 'watering';
   }, [virtualDevice?.actuatorState, latestSensorTick?.action]);
+
+  const autoSimulationIntervalMs = pumpIsActive ? 1000 : 3000;
+
+  const formattedVirtualDeviceLastSync = useMemo(() => {
+    const raw = virtualDevice?.lastSync;
+    if (!raw) return lang === 'bn' ? 'এইমাত্র' : 'just now';
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return lang === 'bn' ? 'অজানা' : 'unknown';
+    return parsed.toLocaleTimeString(lang === 'bn' ? 'bn-BD' : 'en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  }, [virtualDevice?.lastSync, lang]);
 
   const currentFlowLiters = useMemo(() => {
     if (!pumpIsActive) return 0;
@@ -670,11 +685,15 @@ export const Irrigation: React.FC = () => {
     if (!Number.isFinite(sensedMoisture)) return;
 
     const nowMs = Date.now();
-    if (nowMs - lastRealtimeAutoTickAtRef.current < 7000) return;
+    if (nowMs - lastRealtimeAutoTickAtRef.current < 1200) return;
+    if (autoTickInFlightRef.current) return;
     lastRealtimeAutoTickAtRef.current = nowMs;
+    autoTickInFlightRef.current = true;
 
     void simulateVirtualTick(data.policy?.crop || 'Rice', {
       measuredMoisture: sensedMoisture,
+    }).finally(() => {
+      autoTickInFlightRef.current = false;
     });
   }, [
     autoMode,
@@ -686,20 +705,29 @@ export const Irrigation: React.FC = () => {
   ]);
 
   useEffect(() => {
-    if (!autoMode || !autoSimulation || state.userMode === 'guest' || !state.accessToken) return;
+    if (!autoSimulation || state.userMode === 'guest' || !state.accessToken) return;
     lastRealtimeAutoTickAtRef.current = Date.now();
-    const timer = setInterval(() => {
+    const runRealtimeTick = () => {
       if (String(virtualDevice?.actuatorState || '').toLowerCase() === 'watering') return;
+      if (autoTickInFlightRef.current) return;
+
       const sensedMoisture = Number(virtualDevice?.telemetry?.soilMoisture ?? data.moisture);
+      autoTickInFlightRef.current = true;
       void simulateVirtualTick(
         data.policy?.crop || 'Rice',
         Number.isFinite(sensedMoisture) ? { measuredMoisture: sensedMoisture } : undefined,
-      );
-    }, 10000);
+      ).finally(() => {
+        autoTickInFlightRef.current = false;
+      });
+    };
+
+    runRealtimeTick();
+    const timer = setInterval(runRealtimeTick, autoSimulationIntervalMs);
+
     return () => clearInterval(timer);
   }, [
-    autoMode,
     autoSimulation,
+    autoSimulationIntervalMs,
     state.userMode,
     state.accessToken,
     data.policy?.crop,
@@ -708,6 +736,14 @@ export const Irrigation: React.FC = () => {
     virtualDevice?.actuatorState,
     virtualDevice?.telemetry?.soilMoisture,
   ]);
+
+  useEffect(() => {
+    if (!pumpIsActive) return;
+
+    const syncIso = new Date(etaNowMs).toISOString();
+    setVirtualDevice((prev) => (prev ? { ...prev, lastSync: syncIso } : prev));
+    setLastUpdated(new Date(etaNowMs));
+  }, [pumpIsActive, etaNowMs]);
 
   useEffect(() => {
     if (!pumpIsActive) {
@@ -1202,6 +1238,21 @@ export const Irrigation: React.FC = () => {
             <p className="text-xs text-slate-600">{lang === 'bn' ? 'তাপমাত্রা' : 'Temperature'}</p>
             <p className="font-semibold text-sm">{Math.round(Number(virtualDevice?.telemetry?.temperature || 29))}°C</p>
           </div>
+        </div>
+
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
+          <span className="inline-flex items-center rounded-full border border-indigo-200 bg-indigo-50 px-2 py-1 text-indigo-700">
+            {autoSimulation
+              ? (lang === 'bn'
+                ? `লাইভ রিফ্রেশ: প্রতি ${Math.round(autoSimulationIntervalMs / 1000)} সেকেন্ড`
+                : `Live refresh: every ${Math.round(autoSimulationIntervalMs / 1000)}s`)
+              : (lang === 'bn' ? 'লাইভ রিফ্রেশ: বন্ধ' : 'Live refresh: paused')}
+          </span>
+          <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-slate-700">
+            {lang === 'bn'
+              ? `শেষ সিঙ্ক: ${formattedVirtualDeviceLastSync}`
+              : `Last sync: ${formattedVirtualDeviceLastSync}`}
+          </span>
         </div>
 
         <div className="flex flex-wrap gap-3">
