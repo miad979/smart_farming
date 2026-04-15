@@ -303,6 +303,40 @@ test.describe.serial('Role-based UI smoke checks', () => {
     await context.close();
   });
 
+  test('irrigation random tick stays sensor-only and auto decision waters in auto mode', async ({ browser }) => {
+    const context = await newRoleContext(browser, farmerSession);
+    const page = await context.newPage();
+
+    await page.goto(`${APP_BASE_URL}/irrigation`, { waitUntil: 'domcontentloaded' });
+    await expect(page).toHaveURL(/\/irrigation(?:\?.*)?$/);
+    await expect(page.getByRole('heading', { name: 'Irrigation', exact: true })).toBeVisible();
+
+    const autoModeToggle = page.getByTestId('auto-mode-toggle-btn');
+    const autoModeStatusPill = page.getByTestId('auto-mode-status-pill');
+    const actuatorStatus = page.getByTestId('pump-actuator-status');
+
+    await page.getByTestId('pump-sim-force-off-btn').click();
+    await expect(actuatorStatus).toContainText(/Pump OFF/i, { timeout: 15000 });
+
+    // Turn auto mode off, then verify random sensor tick does not start watering.
+    if (await autoModeStatusPill.isVisible()) {
+      await autoModeToggle.click();
+      await expect(autoModeStatusPill).toHaveCount(0, { timeout: 15000 });
+    }
+    await page.getByRole('button', { name: 'Run Random Sensor Tick' }).click();
+    await expect(actuatorStatus).toContainText(/Pump OFF/i, { timeout: 15000 });
+
+    // Turn auto mode back on and verify auto decision can trigger watering at low moisture.
+    await autoModeToggle.click();
+    await expect(autoModeStatusPill).toBeVisible({ timeout: 15000 });
+    await page.getByTestId('pump-sim-moisture-input').fill('20');
+    await page.getByTestId('pump-sim-auto-btn').click();
+    await expect(actuatorStatus).toContainText(/Pump ON/i, { timeout: 15000 });
+    await expect(page.getByTestId('manual-water-latest-result')).toContainText(/Auto|automatic|irrigation/i, { timeout: 15000 });
+
+    await context.close();
+  });
+
   test('farmer mobile smoke routes @mobile', async ({ browser }) => {
     const context = await newRoleContext(browser, farmerSession, {
       viewport: { width: 390, height: 844 },

@@ -1421,6 +1421,7 @@ export const Irrigation: React.FC = () => {
               {lang === 'bn' ? 'ভার্চুয়াল পাম্প সিমুলেটর' : 'Virtual Pump Simulator'}
             </p>
             <span
+              data-testid="pump-actuator-status"
               className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded-full border ${
                 virtualDevice?.actuatorState === 'watering'
                   ? 'bg-orange-100 text-orange-700 border-orange-300'
