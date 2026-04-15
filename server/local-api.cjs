@@ -358,20 +358,30 @@ async function readSqlSnapshotDb() {
 
   try {
     const result = await sqlPool.query(
-      'SELECT payload FROM app_state_snapshots WHERE snapshot_key = $1 LIMIT 1',
+      'SELECT payload, updated_at FROM app_state_snapshots WHERE snapshot_key = $1 LIMIT 1',
       [SQL_SNAPSHOT_KEY],
     )
     const row = result?.rows?.[0]
     if (!row || !row.payload) return null
 
     const payload = row.payload
+    let db = null
     if (typeof payload === 'string') {
-      return JSON.parse(payload)
+      db = JSON.parse(payload)
+    } else if (typeof payload === 'object') {
+      db = payload
     }
-    if (typeof payload === 'object') {
-      return payload
+    if (!db || typeof db !== 'object') return null
+
+    const rawUpdatedAt = row.updated_at
+    const updatedAtMs = rawUpdatedAt instanceof Date
+      ? rawUpdatedAt.getTime()
+      : Number(new Date(rawUpdatedAt).getTime())
+
+    return {
+      db,
+      updatedAtMs: Number.isFinite(updatedAtMs) ? updatedAtMs : 0,
     }
-    return null
   } catch (error) {
     sqlMirrorLastError = error?.message || 'SQL snapshot read failed'
     return null
@@ -1796,9 +1806,39 @@ function removeUploadedDocument(db, fileName) {
 
 async function loadDb() {
   const localDbExists = fs.existsSync(DB_PATH)
+  const localDbMtimeMs = localDbExists
+    ? (() => {
+      try {
+        return Number(fs.statSync(DB_PATH).mtimeMs || 0)
+      } catch {
+        return 0
+      }
+    })()
+    : 0
 
-  // Runtime reads should prefer local JSON to prevent stale SQL snapshot reads
-  // from dropping newly written chat/session updates between requests.
+  const sqlSnapshot = await readSqlSnapshotDb()
+  const sqlDb = sqlSnapshot?.db
+  const sqlSnapshotUpdatedAtMs = Number(sqlSnapshot?.updatedAtMs || 0)
+  const shouldPreferSqlSnapshot = Boolean(sqlDb)
+    && (!localDbExists || sqlSnapshotUpdatedAtMs >= localDbMtimeMs)
+
+  // Prefer the newer source at startup so Supabase-backed snapshots can boot
+  // the app, while still protecting against stale SQL data after local writes.
+  if (shouldPreferSqlSnapshot && sqlDb && typeof sqlDb === 'object') {
+    const db = sqlDb
+    seedIfEmpty(db)
+    migrateLegacyStorageTables(db)
+    const changed = normalizeAllPrices(db)
+
+    if (changed || !localDbExists) {
+      fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), 'utf8')
+      scheduleSqlSnapshotWrite(db)
+    }
+
+    dbBootstrapSource = 'sql-snapshot'
+    return db
+  }
+
   if (localDbExists) {
     const db = (() => {
       const raw = fs.readFileSync(DB_PATH, 'utf8')
@@ -1816,22 +1856,6 @@ async function loadDb() {
     }
 
     dbBootstrapSource = 'local-json'
-    return db
-  }
-
-  const sqlDb = await readSqlSnapshotDb()
-  if (sqlDb && typeof sqlDb === 'object') {
-    const db = sqlDb
-    seedIfEmpty(db)
-    migrateLegacyStorageTables(db)
-    const changed = normalizeAllPrices(db)
-
-    if (changed || !localDbExists) {
-      fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), 'utf8')
-      scheduleSqlSnapshotWrite(db)
-    }
-
-    dbBootstrapSource = 'sql-snapshot'
     return db
   }
 
