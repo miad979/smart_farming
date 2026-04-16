@@ -14,7 +14,7 @@ In GitHub UI it appears under workflow "UI Smoke CI".
 
 1. Open GitHub repository settings.
 2. Go to Settings -> Branches.
-3. Add or edit a protection rule for main (and master if used).
+3. Add or edit protection rules for `main` and `release/stable`.
 4. Enable Require status checks to pass before merging.
 5. Enable Require branches to be up to date before merging.
 6. In required checks, add/select:
@@ -51,7 +51,7 @@ PowerShell:
 ```powershell
 $env:GITHUB_REPOSITORY = 'owner/repo'
 $env:GITHUB_TOKEN = '<token-with-repo-admin-permission>'
-$env:PROTECT_BRANCHES = 'main'
+$env:PROTECT_BRANCHES = 'main,release/stable'
 npm run protect:ui-smoke
 ```
 
@@ -85,6 +85,13 @@ What this does:
 3. Creates GitHub repo (or reuses existing one).
 4. Adds/updates origin remote and pushes current branch.
 5. Applies required check: required-ui-smoke
+
+For release-branch strategy, use:
+
+```powershell
+$env:PROTECT_BRANCHES = 'main,release/stable'
+npm run protect:ui-smoke
+```
 
 If initial commit fails due to git identity, set:
 

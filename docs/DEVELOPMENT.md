@@ -107,6 +107,38 @@ VITE_UNSPLASH_ACCESS_KEY=xxx
 
 ## Development Workflow
 
+### Branching and PR Release Flow (April 2026)
+
+This repository now uses a dedicated release branch:
+
+- `main`: production-ready branch
+- `release/stable`: integration and release-candidate branch
+
+Use this PR flow for all future changes:
+
+1. Create a feature branch from `release/stable`.
+2. Open PR: `feature/*` -> `release/stable`.
+3. Run required checks and merge into `release/stable`.
+4. Open PR: `release/stable` -> `main` for production release.
+5. Merge only when release checks are green.
+
+Suggested commands:
+
+```bash
+git checkout release/stable
+git pull origin release/stable
+git checkout -b feature/my-change
+
+# after commits
+git push -u origin feature/my-change
+```
+
+Release PR creation link:
+
+```text
+https://github.com/miad979/smart_farming/compare/main...release/stable
+```
+
 ### 1. Creating a New Page
 
 **Step 1: Create Page Component**
