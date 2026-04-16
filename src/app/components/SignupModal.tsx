@@ -179,6 +179,7 @@ export const SignupModal: React.FC<SignupModalProps> = ({ isOpen, onClose }) => 
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? (lang === 'bn' ? 'পাসওয়ার্ড লুকান' : 'Hide password') : (lang === 'bn' ? 'পাসওয়ার্ড দেখান' : 'Show password')}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -203,6 +204,7 @@ export const SignupModal: React.FC<SignupModalProps> = ({ isOpen, onClose }) => 
                 <button
                   type="button"
                   onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  aria-label={showConfirmPassword ? (lang === 'bn' ? 'নিশ্চিত পাসওয়ার্ড লুকান' : 'Hide confirm password') : (lang === 'bn' ? 'নিশ্চিত পাসওয়ার্ড দেখান' : 'Show confirm password')}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 >
                   {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -218,6 +220,7 @@ export const SignupModal: React.FC<SignupModalProps> = ({ isOpen, onClose }) => 
               <select
                 value={formData.role}
                 onChange={(e) => setFormData({ ...formData, role: e.target.value as any })}
+                aria-label={lang === 'bn' ? 'ভূমিকা নির্বাচন' : 'Select role'}
                 className="w-full px-4 py-2.5 bg-muted border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
               >
                 <option value="farmer">{lang === 'bn' ? 'কৃষক' : 'Farmer'}</option>

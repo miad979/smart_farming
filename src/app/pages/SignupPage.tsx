@@ -182,6 +182,7 @@ export const SignupPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? (lang === 'bn' ? 'পাসওয়ার্ড লুকান' : 'Hide password') : (lang === 'bn' ? 'পাসওয়ার্ড দেখান' : 'Show password')}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -205,6 +206,7 @@ export const SignupPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  aria-label={showConfirmPassword ? (lang === 'bn' ? 'নিশ্চিত পাসওয়ার্ড লুকান' : 'Hide confirm password') : (lang === 'bn' ? 'নিশ্চিত পাসওয়ার্ড দেখান' : 'Show confirm password')}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 >
                   {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -219,6 +221,7 @@ export const SignupPage: React.FC = () => {
               <select
                 value={formData.role}
                 onChange={(e) => setFormData({ ...formData, role: e.target.value as 'farmer' | 'doctor' })}
+                aria-label={lang === 'bn' ? 'ভূমিকা নির্বাচন' : 'Select role'}
                 className="w-full rounded-lg border border-border bg-muted px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-green-500"
               >
                 <option value="farmer">{lang === 'bn' ? 'কৃষক' : 'Farmer'}</option>

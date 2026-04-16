@@ -127,7 +127,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
             <div className="flex items-center gap-3 px-4 py-2">
               {state.isOnline ? (
                 <>
-                  <div className="flex items-center gap-2 text-green-600 dark:text-green-400">
+                  <div className="flex items-center gap-2 text-green-700 dark:text-green-300">
                     <div className="relative">
                       <Wifi className="w-5 h-5" />
                       <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full animate-pulse" />

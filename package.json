@@ -13,8 +13,11 @@
     "test:actions": "node server/action-workflow-test.cjs",
     "test:load": "node server/load-test.cjs",
     "test:weather:live": "node server/validate-live-weather.cjs",
-    "test:ui": "playwright test tests/ui --reporter=line --workers=1",
+    "test:unit": "jest --runInBand",
+    "test:unit:coverage": "jest --coverage --runInBand",
+    "test:ui": "playwright test tests/ui --grep-invert @a11y --reporter=line --workers=1",
     "test:ui:mobile": "playwright test tests/ui --grep @mobile --reporter=line --workers=1",
+    "test:a11y": "playwright test tests/ui --grep @a11y --reporter=line --workers=1",
     "test:ui:headed": "playwright test tests/ui --headed",
     "repo:bootstrap": "node server/bootstrap-github-repo.cjs",
     "protect:ui-smoke": "node server/apply-branch-protection.cjs",
@@ -93,11 +96,23 @@
     "vaul": "1.1.2"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.10.2",
     "@playwright/test": "^1.59.1",
     "@tailwindcss/vite": "4.1.12",
     "@vitejs/plugin-react": "4.7.0",
+    "jest": "^30.2.0",
     "tailwindcss": "4.1.12",
     "vite": "6.4.2"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "<rootDir>/tests/unit/**/*.test.cjs"
+    ],
+    "collectCoverageFrom": [
+      "server/lib/**/*.cjs"
+    ],
+    "coverageDirectory": "coverage/unit"
   },
   "overrides": {
     "axios": "^1.15.0",

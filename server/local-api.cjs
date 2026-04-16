@@ -1,6 +1,13 @@
 const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
+const { isAdminRole: isAdminRoleUtil } = require('./lib/authorization-utils.cjs')
+const { applyPumpCapacityForCycle: applyPumpCapacityForCycleUtil } = require('./lib/irrigation-utils.cjs')
+const {
+  buildWeatherCacheKey,
+  isWeatherCacheFresh,
+  buildDegradedWeatherPayload,
+} = require('./lib/weather-utils.cjs')
 
 function parseEnvFileLine(line) {
   const trimmed = String(line || '').trim()
@@ -135,6 +142,8 @@ const ENV_DEVICE_HELP_LINE = String(process.env.DEVICE_HELP_LINE || DEFAULT_DEVI
 const TTS_CACHE = new Map() // In-memory cache for generated speech
 const realtimeClients = new Map()
 const RATE_LIMIT_BUCKETS = new Map()
+const WEATHER_CACHE = new Map()
+const WEATHER_CACHE_TTL_MS = Math.max(60 * 1000, Number(process.env.WEATHER_CACHE_TTL_MS || 15 * 60 * 1000))
 const DHAKA_LIVE_UPDATE_INTERVAL_MS = Number(process.env.DHAKA_LIVE_UPDATE_INTERVAL_MS || 60000)
 const MARKET_VOLATILITY_PROFILE = normalizeMarketVolatilityProfile(process.env.MARKET_VOLATILITY_PROFILE || 'balanced')
 const MARKET_PROFILE_PRESETS = Object.freeze({
@@ -761,6 +770,42 @@ async function fetchLiveWeather(lat, lng) {
   }
 }
 
+function cacheWeatherPayload(lat, lng, weatherPayload) {
+  if (!weatherPayload || typeof weatherPayload !== 'object') return
+
+  const key = buildWeatherCacheKey(lat, lng)
+  WEATHER_CACHE.set(key, {
+    payload: weatherPayload,
+    fetchedAtMs: Date.now(),
+  })
+}
+
+function getCachedWeatherPayload(lat, lng) {
+  const key = buildWeatherCacheKey(lat, lng)
+  const cached = WEATHER_CACHE.get(key)
+  if (!cached) return null
+  if (!isWeatherCacheFresh(cached, WEATHER_CACHE_TTL_MS)) {
+    WEATHER_CACHE.delete(key)
+    return null
+  }
+  return cached.payload
+}
+
+async function fetchLiveWeatherWithFallback(lat, lng) {
+  try {
+    const weather = await fetchLiveWeather(lat, lng)
+    cacheWeatherPayload(lat, lng, weather)
+    return weather
+  } catch (error) {
+    const cached = getCachedWeatherPayload(lat, lng)
+    if (!cached) {
+      throw error
+    }
+
+    return buildDegradedWeatherPayload(cached, error?.message || 'Provider fetch failed', nowIso())
+  }
+}
+
 function estimateYieldAdvice({ crop, moisture, weather }) {
   const cropName = crop || 'Rice'
   const humidity = Number(weather?.current?.humidity || 0)
@@ -866,32 +911,7 @@ function normalizeMaxCycleMinutes(value) {
 }
 
 function applyPumpCapacityForCycle({ targetLiters, pumpCapacityLpm, maxCycleMinutes, respectCycleLimit = true }) {
-  const safeTarget = Math.max(0, Number(targetLiters || 0))
-  const safeCapacity = Math.max(1, Number(pumpCapacityLpm || 1))
-  const safeMaxCycleMinutes = Math.max(1, Number(maxCycleMinutes || 1))
-
-  if (safeTarget <= 0) {
-    return {
-      targetLiters: 0,
-      appliedLiters: 0,
-      runtimeSeconds: 0,
-      cappedByCycle: false,
-    }
-  }
-
-  const flowPerSecond = safeCapacity / 60
-  const requiredSeconds = safeTarget / flowPerSecond
-  const allowedSeconds = respectCycleLimit ? (safeMaxCycleMinutes * 60) : requiredSeconds
-  const runtimeSeconds = Math.max(1, Math.ceil(Math.min(requiredSeconds, allowedSeconds)))
-  const deliveredLiters = Math.max(1, Math.round(flowPerSecond * runtimeSeconds))
-  const appliedLiters = Math.min(safeTarget, deliveredLiters)
-
-  return {
-    targetLiters: safeTarget,
-    appliedLiters,
-    runtimeSeconds,
-    cappedByCycle: respectCycleLimit && (requiredSeconds > allowedSeconds),
-  }
+  return applyPumpCapacityForCycleUtil({ targetLiters, pumpCapacityLpm, maxCycleMinutes, respectCycleLimit })
 }
 
 function createDefaultIrrigationSchedule(userId, cropName = 'Rice') {
@@ -1147,7 +1167,7 @@ function roleBn(role) {
 }
 
 function isAdminRole(role) {
-  return role === 'admin' || role === 'super_admin'
+  return isAdminRoleUtil(role)
 }
 
 function isPrimaryAdmin(user) {
@@ -3911,7 +3931,7 @@ function createLocalApiMiddleware() {
           return send(res, 400, { error: 'Invalid coordinates' })
         }
 
-        const weather = await fetchLiveWeather(lat, lng)
+        const weather = await fetchLiveWeatherWithFallback(lat, lng)
         return send(res, 200, weather)
       }
 
@@ -3926,7 +3946,7 @@ function createLocalApiMiddleware() {
           return send(res, 400, { error: 'Invalid advisory parameters' })
         }
 
-        const weather = await fetchLiveWeather(lat, lng)
+        const weather = await fetchLiveWeatherWithFallback(lat, lng)
         const advice = estimateYieldAdvice({ crop, moisture, weather })
         return send(res, 200, { advice, weather })
       }
