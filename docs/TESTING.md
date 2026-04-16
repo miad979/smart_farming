@@ -15,6 +15,7 @@ It includes:
 
 - Project: Smart Farming System
 - Repository: https://github.com/miad979/smart_farming
+- Owner: Miadul Islam Nizzan (Undergraduate student, BSc in CSE, Green University, Bangladesh; sole developer)
 - Active branch protection required check: required-ui-smoke
 - Runtime model: full Node runtime (frontend + backend API + realtime)
 - Latest verified deployment automation commit: b47edfb
@@ -1404,7 +1405,7 @@ Result:
 
 ---
 
-Document version: 2.21
+Document version: 2.22
 Status: Active and maintained
 Last updated: 2026-04-16
-Owner: Engineering / QA
+Owner: Miadul Islam Nizzan (Undergraduate student, BSc in CSE, Green University, Bangladesh; sole developer)
