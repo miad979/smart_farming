@@ -40,6 +40,7 @@ Out of scope (still recommended):
 ### Local developer environment
 - OS: Windows
 - Node/NPM: project engine requirements in package.json
+- Shell: PowerShell
 - Local API: server/local-api.cjs
 - Local runtime server: server/preview-server.cjs
 - Local DB modes:
@@ -56,6 +57,11 @@ Out of scope (still recommended):
 - Required runtime endpoints:
   - /api/health
   - /api/realtime/stream
+
+### Test tooling and languages (summary)
+- Languages: TypeScript (frontend), JavaScript (Node.js runtime/tests), SQL (migrations), Markdown (docs)
+- Test tools: Playwright (UI), Jest (unit), axe-core/playwright (a11y), custom Node load harness (server/load-test.cjs)
+- Security tooling: npm audit, workflow-driven checks in GitHub Actions
 
 ## 5) First-to-Last Execution Order (Standard)
 
@@ -1398,7 +1404,7 @@ Result:
 
 ---
 
-Document version: 2.20
+Document version: 2.21
 Status: Active and maintained
 Last updated: 2026-04-16
 Owner: Engineering / QA
