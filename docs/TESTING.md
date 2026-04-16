@@ -1348,9 +1348,27 @@ npm run db:csv
 node server/check-production-env.cjs
 ```
 
+## 16) Release Branch Workflow Verification (2026-04-16)
+
+Objective:
+- Ensure branch-based release flow is executable and produces a valid `release/stable` -> `main` compare path.
+
+Actions completed:
+- Created and pushed dedicated release branch: `release/stable`.
+- Established feature-branch pattern: `feature/*` from `release/stable`.
+- Added this verification update on feature branch `feature/release-pr-bootstrap-20260416` as a PR-seed change.
+
+Execution checks:
+- `git branch -r` shows both `origin/main` and `origin/release/stable`.
+- Branch compare API confirms references are valid and reports identical only when SHAs match.
+- Release PR path to use after merging feature to release: `https://github.com/miad979/smart_farming/compare/main...release/stable?expand=1`
+
+Expected outcome:
+- Once `release/stable` is ahead of `main`, GitHub compare page presents a normal pull-request creation flow.
+
 ---
 
-Document version: 2.17
+Document version: 2.18
 Status: Active and maintained
 Last updated: 2026-04-16
 Owner: Engineering / QA
