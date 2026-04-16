@@ -784,6 +784,18 @@ This run validates that app weather output matches live provider data and is not
   - freshness check: PASS (`updatedAt` changed between sequential calls)
   - overall pass rate: 100% (55/55 checks)
 
+### Testing Performance Formula
+
+Testing performance is calculated as:
+
+`TestingPerformance(%) = (SuccessfulTestCases / TotalNumberOfTestCases) × 100`
+
+Applied to this run:
+
+- Successful test cases: 55
+- Total number of test cases: 55
+- `TestingPerformance(%) = (55 / 55) × 100 = 100%`
+
 ## 8) What Was Modified to Improve Testability
 
 ### Test infrastructure
@@ -947,7 +959,7 @@ node server/check-production-env.cjs
 
 ---
 
-Document version: 2.9
+Document version: 2.10
 Status: Active and maintained
 Last updated: 2026-04-16
 Owner: Engineering / QA
