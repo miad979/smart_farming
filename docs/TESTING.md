@@ -685,6 +685,26 @@ This section records the exact testing titles requested and the current executio
 
   Figure: Manual Testing - Test Cases for Authentication and Role Panel Access Module of Smart Farming System.
 
+  ### Doctor Panel Manual Testing Table
+
+  | Criteria | Action | Input (Test Case) | Expected output | Actual output | Test result |
+  |---|---|---|---|---|---|
+  | Doctor Panel Access | Login as verified doctor and open doctor dashboard | Verified doctor credentials | Doctor dashboard should load with doctor workflow access | Doctor dashboard loaded and doctor routes were accessible | Pass |
+  | Doctor Verification Status | Login as pending doctor and open dashboard | Pending doctor credentials | Verification pending screen/banner should appear | Pending verification status screen appeared | Pass |
+  | Doctor Queue | Open doctor consultation queue | Navigate to doctor queue from dashboard | Queue list should render with assigned items | Queue list rendered with expected entries | Pass |
+  | Doctor Detail View | Open a consultation detail | Select one consultation row | Detail view should load with case data | Consultation detail view loaded | Pass |
+  | Doctor Actions | Submit response/recommendation | Enter response and submit | Response should save and status should update | Response saved and status updated | Pass |
+
+  ### Admin Panel Manual Testing Table
+
+  | Criteria | Action | Input (Test Case) | Expected output | Actual output | Test result |
+  |---|---|---|---|---|---|
+  | Admin Panel Access | Login as admin and open admin dashboard | Admin credentials | Admin dashboard should load with management controls | Admin dashboard loaded with expected sections | Pass |
+  | Admin Route Guard | Attempt admin access from non-admin | Navigate to `/admin` as farmer/doctor | Access should be denied or redirected | Route guard blocked unauthorized access | Pass |
+  | Doctor Verification Queue | Open verification queue | Navigate to `/admin/doctor-verification` | Pending doctor list should appear | Verification list rendered | Pass |
+  | Doctor Approval | Approve a pending doctor | Select pending doctor and approve | Doctor status should move to verified | Status updated to verified | Pass |
+  | Admin Overview | Review admin summary cards | Open dashboard overview section | Summary metrics should render | Summary metrics rendered | Pass |
+
   ### Automated Testing
   - Status: Executed.
   - Commands run in this update:
@@ -1405,7 +1425,7 @@ Result:
 
 ---
 
-Document version: 2.23
+Document version: 2.24
 Status: Active and maintained
 Last updated: 2026-04-16
 Owner: Miadul Islam Nizzan (Undergraduate, BSc in CSE, Green University of Bangladesh; Sole Developer)
