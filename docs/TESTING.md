@@ -101,6 +101,11 @@ npm run db:table
 npm run db:csv
 ```
 
+7.2 Optional live weather correctness validation
+```bash
+npm run test:weather:live
+```
+
 8. Production environment guard
 ```bash
 # PowerShell
@@ -752,6 +757,33 @@ This run validates structured local table visibility and CSV export for snapshot
 - Output pattern:
   - exported files generated under `local-db-export/` (e.g., `users.csv`, `irrigation.csv`, `consultations.csv`)
 
+## 7D) Live Weather Correctness Validation Run (2026-04-16)
+
+This run validates that app weather output matches live provider data and is not stale.
+
+### Automated command
+- Command: `npm run test:weather:live`
+- Result: PASS
+
+### Validation criteria covered
+- app endpoint matches Open-Meteo live values for:
+  - current temperature, feels-like, humidity, rainfall
+  - wind speed/gust/direction, cloud cover, UV, weather code
+  - 3-day forecast temperature, rain probability, precipitation sum, UV
+- app payload freshness:
+  - `updatedAt` age within 120 seconds
+  - sequential calls produce newer `updatedAt`
+
+### Run evidence summary
+- Base URL: `http://localhost:5173`
+- Coordinates validated:
+  - Dhaka (23.8103, 90.4125)
+  - Chattogram (22.3569, 91.7832)
+- Result snapshot:
+  - point-level checks: PASS on both locations
+  - freshness check: PASS (`updatedAt` changed between sequential calls)
+  - overall pass rate: 100% (55/55 checks)
+
 ## 8) What Was Modified to Improve Testability
 
 ### Test infrastructure
@@ -904,6 +936,7 @@ npm run test:security
 npm run test:ui
 npm run test:ui:mobile
 npm run test:load
+npm run test:weather:live
 npm run secret:auth
 npm run demo:free
 npm run demo:free:skip-build
@@ -914,7 +947,7 @@ node server/check-production-env.cjs
 
 ---
 
-Document version: 2.8
+Document version: 2.9
 Status: Active and maintained
-Last updated: 2026-04-15
+Last updated: 2026-04-16
 Owner: Engineering / QA

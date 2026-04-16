@@ -12,6 +12,7 @@
     "test:security": "node server/security-tests.cjs",
     "test:actions": "node server/action-workflow-test.cjs",
     "test:load": "node server/load-test.cjs",
+    "test:weather:live": "node server/validate-live-weather.cjs",
     "test:ui": "playwright test tests/ui --reporter=line --workers=1",
     "test:ui:mobile": "playwright test tests/ui --grep @mobile --reporter=line --workers=1",
     "test:ui:headed": "playwright test tests/ui --headed",
