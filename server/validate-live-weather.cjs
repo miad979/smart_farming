@@ -7,6 +7,8 @@ const COORDS = [
 
 const FRESHNESS_WINDOW_SECONDS = 120
 const FRESHNESS_DELTA_SECONDS = 3
+const FETCH_RETRY_ATTEMPTS = Math.max(0, Number(process.env.WEATHER_VALIDATE_RETRY_ATTEMPTS || 2))
+const FETCH_RETRY_DELAY_MS = Math.max(150, Number(process.env.WEATHER_VALIDATE_RETRY_DELAY_MS || 750))
 
 function nowIso() {
   return new Date().toISOString()
@@ -38,13 +40,52 @@ function buildProviderUrl(lat, lng) {
   return `https://api.open-meteo.com/v1/forecast?${params.toString()}`
 }
 
+function isRetriableStatus(status) {
+  return status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 599)
+}
+
+function isLikelyTransientError(error) {
+  const message = String(error?.message || '').toLowerCase()
+  return (
+    message.includes('fetch failed')
+    || message.includes('network')
+    || message.includes('timeout')
+    || message.includes('econnreset')
+    || message.includes('etimedout')
+    || message.includes('econnrefused')
+  )
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 async function fetchJson(url, label) {
-  const response = await fetch(url)
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    throw new Error(`${label} failed (${response.status}): ${text}`)
+  let lastError = null
+
+  for (let attempt = 0; attempt <= FETCH_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(url)
+      if (!response.ok) {
+        const text = await response.text().catch(() => '')
+        const error = new Error(`${label} failed (${response.status}): ${text}`)
+        if (attempt < FETCH_RETRY_ATTEMPTS && isRetriableStatus(response.status)) {
+          await sleep(FETCH_RETRY_DELAY_MS * (attempt + 1))
+          continue
+        }
+        throw error
+      }
+      return response.json()
+    } catch (error) {
+      lastError = error
+      if (attempt >= FETCH_RETRY_ATTEMPTS || !isLikelyTransientError(error)) {
+        throw error
+      }
+      await sleep(FETCH_RETRY_DELAY_MS * (attempt + 1))
+    }
   }
-  return response.json()
+
+  throw lastError || new Error(`${label} failed after retries`)
 }
 
 function evaluatePoint(app, provider, point) {

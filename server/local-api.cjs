@@ -1840,10 +1840,33 @@ async function loadDb() {
   }
 
   if (localDbExists) {
-    const db = (() => {
+    let db = null
+
+    try {
       const raw = fs.readFileSync(DB_PATH, 'utf8')
-      return raw ? JSON.parse(raw) : {}
-    })()
+      db = raw ? JSON.parse(raw) : {}
+    } catch (error) {
+      const errorMessage = error?.message || String(error || 'Unknown parse error')
+      console.warn(`[db] Failed to parse local snapshot at ${DB_PATH}: ${errorMessage}`)
+
+      const recoveredDb = (sqlDb && typeof sqlDb === 'object') ? sqlDb : createEmptyDb()
+      seedIfEmpty(recoveredDb)
+      migrateLegacyStorageTables(recoveredDb)
+      normalizeAllPrices(recoveredDb)
+
+      const backupPath = `${DB_PATH}.corrupt-${Date.now()}`
+      try {
+        fs.copyFileSync(DB_PATH, backupPath)
+        console.warn(`[db] Corrupted local snapshot backed up to ${backupPath}`)
+      } catch {
+        // Best effort only; recovery should continue even if backup fails.
+      }
+
+      fs.writeFileSync(DB_PATH, JSON.stringify(recoveredDb, null, 2), 'utf8')
+      scheduleSqlSnapshotWrite(recoveredDb)
+      dbBootstrapSource = sqlDb ? 'sql-snapshot-recovered' : 'empty-local-recovered'
+      return recoveredDb
+    }
 
     seedIfEmpty(db)
     migrateLegacyStorageTables(db)

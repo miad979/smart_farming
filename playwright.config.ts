@@ -27,6 +27,7 @@ export default defineConfig({
         reuseExistingServer: !process.env.CI,
         env: {
           ...process.env,
+          NODE_ENV: 'test',
           PORT: String(uiPort),
         },
       },
