@@ -338,7 +338,26 @@ export const DoctorDashboard: React.FC = () => {
                           <span className="hidden md:inline">{t('viewCase', lang)}</span>
                           <span className="md:hidden">{t('view', lang) || 'View'}</span>
                         </Button>
+                        {/* Call User Button */}
+                        <Button
+                          variant="secondary"
+                          className="flex-1 min-w-[120px]"
+                          onClick={() => window.open(`tel:${consultation.farmerPhone}`)}
+                        >
+                          <User className="w-4 h-4 mr-2" />
+                          {lang === 'bn' ? 'কল করুন' : 'Call User'}
+                        </Button>
                       </div>
+                      {/*
+                        Future Enhancements for Doctor Portal:
+                        - Real-time chat with user
+                        - View patient history
+                        - Upload/send prescriptions
+                        - Schedule follow-up
+                        - Mark as urgent
+                        - Quick access to medical resources
+                        - Video/audio call integration
+                      */}
                     </div>
                   </div>
                 </CardContent>
