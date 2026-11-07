@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Voice questions (speech-to-text, বাংলা/English) in the disease assistant chat
 - Live account alerts (`alerts:{userId}`): doctor verification decisions now notify the doctor and unlock the panel without re-login
 - `npm run test:consultations` end-to-end workflow test (14 checks)
-- `npm run test:weather`: live weather workflow test with simulated providers (8 checks, runs in CI)
+- `npm run test:weather`: live weather workflow test with simulated providers (9 checks, runs in CI)
 - Optional `WEATHER_PROVIDERS` env var to set the weather provider order (default `open-meteo,met-norway`)
 - Weather widget: "Use my location" and "Try again" buttons
 - `npm run dev:lan` to open the dev server from a phone on the same Wi-Fi
@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Admin "Weekly Activity" chart now shows real detections and consultations (`GET /api/admin/activity`)
 
 ### Fixed
+- Weather place name stayed empty for 24 hours after one failed lookup; failures are now retried after 10 minutes and logged
 - Dashboard: each card loads on its own (one failing request no longer blanks the others), with a refresh button, a "some data could not load" notice, and an automatic refresh when you return to the tab
 - Dashboard: a new disease scan appears immediately (realtime); the "Possible disease" badge only shows when there is a scan, and a healthy scan shows "Healthy"
 - Dashboard: crop price shows your own market first (profile location, then Dhaka) with its real unit; the weekly usage chart shows a clear message when no water was used

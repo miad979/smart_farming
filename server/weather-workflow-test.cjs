@@ -153,6 +153,21 @@ async function run() {
     assert(bad.status === 400, `Moisture 150% should be rejected, got ${bad.status}`)
   })
 
+  await step('a failed place-name lookup is retried after 10 minutes, not after 24 hours', async () => {
+    mode = { nominatim: 'http429' }
+    const first = await get('/weather/current?lat=23.46&lng=91.18')
+    assert(first.status === 200 && first.json.location.name === null, 'Weather should still load without a place name')
+    mode = {}
+    const realNow = Date.now
+    Date.now = () => realNow() + 20 * 60 * 1000 // past both the weather cache and the failure window
+    try {
+      const later = await get('/weather/current?lat=23.46&lng=91.18')
+      assert(later.json.location.name === 'Bogura', `Place name should be looked up again, got ${later.json.location.name}`)
+    } finally {
+      Date.now = realNow
+    }
+  })
+
   server.close()
   console.log(`\nWeather workflow: ${results.length} checks passed`)
   process.exit(0)
