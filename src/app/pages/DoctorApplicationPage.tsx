@@ -358,6 +358,19 @@ export const DoctorApplicationPage: React.FC = () => {
 
     if (!result.success) {
       const message = result.error || (lang === 'bn' ? 'সাবমিট ব্যর্থ হয়েছে' : 'Submission failed');
+      // Expired draft uploads: clear them so the doctor can simply upload again (everything else is kept).
+      if (/expired|upload your certificate and resume again/i.test(message)) {
+        replaceCertificate();
+        replaceResume();
+        setFieldErrors({
+          certificate: lang === 'bn' ? 'সার্টিফিকেট আবার আপলোড করুন' : 'Please upload your certificate again',
+          resume: lang === 'bn' ? 'রিজিউম আবার আপলোড করুন' : 'Please upload your resume again',
+        });
+        setError(lang === 'bn'
+          ? 'আপনার আপলোড করা ডকুমেন্টের মেয়াদ শেষ হয়েছে (২৪ ঘণ্টার মধ্যে আবেদন সম্পন্ন হয়নি)। ডকুমেন্ট আবার আপলোড করে সাবমিট করুন।'
+          : 'Your uploaded documents expired (the application was not finished within 24 hours). Upload them again and submit.');
+        return;
+      }
       // Problems with the account itself (email taken, password rule) are fixed in step 1; nothing is lost.
       setAccountError(/email|password|already exists/i.test(message));
       setError(message);
@@ -512,6 +525,12 @@ export const DoctorApplicationPage: React.FC = () => {
             />
             {fieldErrors.experienceYears && <p className="mt-1 text-xs text-red-600">{fieldErrors.experienceYears}</p>}
           </div>
+
+          <p className="text-xs text-slate-600">
+            {lang === 'bn'
+              ? 'ডকুমেন্টগুলো শুধু অ্যাডমিন যাচাইয়ের জন্য। আবেদন জমা না দিলে আপলোড করা ফাইল ২৪ ঘণ্টা পরে স্বয়ংক্রিয়ভাবে মুছে ফেলা হয়।'
+              : 'Documents are used only for admin verification. If you do not submit the application, uploaded files are deleted automatically after 24 hours.'}
+          </p>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="rounded-3xl border border-blue-200 bg-gradient-to-br from-blue-50 via-cyan-50 to-sky-50 p-4 shadow-sm">

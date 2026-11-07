@@ -57,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `npm run test:production` (production-mode checks, optional Postgres redeploy test) runs in CI with a Postgres service
 
 ### Security
+- Doctor documents uploaded during an application that is never submitted are no longer kept forever: unattached uploads are deleted automatically after 24 hours (`UPLOAD_DRAFT_TTL_HOURS`) from disk and Postgres; a registration that references an expired upload is refused with "upload again", and step 2 tells applicants about the 24-hour retention
 - Production no longer creates the public demo accounts (`admin123` / `super123`) and refuses those passwords at sign-in
 - Client IP for rate limits and lockout no longer trusts the client-supplied part of `X-Forwarded-For` (`TRUST_PROXY_HOPS`, `CLIENT_IP_HEADER`)
 - Dependency vulnerabilities fixed without breaking upgrades: 1 critical + 14 high → 0 high/critical (incl. react-router 7.18.5, vite 6.4.5, tar, ws, axios, dompurify)

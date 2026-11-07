@@ -10,7 +10,7 @@ async function run() {
   process.chdir(tempDir);
   process.env.AUTH_TOKEN_SECRET = 'ci_consultation_test_secret_2026';
 
-  const { createLocalApiMiddleware } = require(path.resolve(__dirname, 'local-api.cjs'));
+  const { createLocalApiMiddleware, runUploadCleanupOnce } = require(path.resolve(__dirname, 'local-api.cjs'));
   const middleware = createLocalApiMiddleware();
   const server = http.createServer((req, res) => {
     middleware(req, res, () => {
@@ -333,6 +333,47 @@ async function run() {
     assert(adminEvents.some((e) => String(e.channel).startsWith('alerts:') && e.data?.alert?.type === 'doctor_application' && /Dr\. Epsilon/.test(e.data.alert.message)), 'Admin got no live doctor-application alert');
     const pending = await admin.request('GET', '/doctors/pending');
     assert(pending.json.doctors.some((d) => d.email === 'doc.e@smartfarming.local' && d.specialty === 'Entomology'), 'Application missing from pending list');
+  });
+
+  await step('abandoned uploads are deleted after 24 h; registered doctors\' documents are kept; expired links are refused', async () => {
+    const anon = createClient();
+    const mk = (tag) => Buffer.from(`%PDF-1.4\n% ${tag} ${Date.now()} ${Math.random()}\n`).toString('base64');
+    const orphan = await anon.request('POST', '/uploads/documents', { fileName: 'abandoned.pdf', base64Data: mk('orphan'), contentType: 'application/pdf' });
+    const kept = await anon.request('POST', '/uploads/documents', { fileName: 'kept.pdf', base64Data: mk('kept'), contentType: 'application/pdf' });
+    const fresh = await anon.request('POST', '/uploads/documents', { fileName: 'fresh.pdf', base64Data: mk('fresh'), contentType: 'application/pdf' });
+    assert([orphan, kept, fresh].every((r) => r.status === 200), 'Uploads failed');
+    const reg = await anon.request('POST', '/auth/signup', {
+      email: 'doc.kept@smartfarming.local', password: 'Strong!Pass123', name: 'Dr. Kept', role: 'doctor', phone: '+8801700000010',
+      specialty: 'Agronomy', registrationNumber: 'REG-K', certificateDocument: kept.json.file.url, resumeDocument: 'https://example.com/r.pdf',
+      termsAccepted: true, privacyAccepted: true,
+    });
+    assert(reg.status === 200, `Signup failed (${reg.status})`);
+
+    // Pretend two days have passed for the orphan and the kept document (not for the fresh one).
+    const fs = require('fs');
+    const dbFile = path.resolve(process.cwd(), '.local-db.json');
+    const db = JSON.parse(fs.readFileSync(dbFile, 'utf8'));
+    const old = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
+    db.uploads[orphan.json.file.id].uploadedAt = old;
+    db.uploads[kept.json.file.id].uploadedAt = old;
+    fs.writeFileSync(dbFile, JSON.stringify(db));
+    await wait(20);
+
+    const removed = await runUploadCleanupOnce();
+    assert(removed === 1, `Expected exactly 1 abandoned upload removed, got ${removed}`);
+    const gone = await anon.request('GET', `/uploads/documents/${orphan.json.file.id}`);
+    assert(gone.status === 404, `Abandoned upload should be deleted (${gone.status})`);
+    const stillThere = await anon.request('GET', `/uploads/documents/${kept.json.file.id}`);
+    assert(stillThere.status === 200, `Registered doctor's document must be kept (${stillThere.status})`);
+    const recent = await anon.request('GET', `/uploads/documents/${fresh.json.file.id}`);
+    assert(recent.status === 200, `A recent draft upload must be kept (${recent.status})`);
+
+    const late = await anon.request('POST', '/auth/signup', {
+      email: 'doc.late@smartfarming.local', password: 'Strong!Pass123', name: 'Dr. Late', role: 'doctor', phone: '+8801700000011',
+      specialty: 'Agronomy', registrationNumber: 'REG-L', certificateDocument: orphan.json.file.url, resumeDocument: fresh.json.file.url,
+      termsAccepted: true, privacyAccepted: true,
+    });
+    assert(late.status === 400 && late.json.expiredDocuments === true, `Signup with an expired upload must be refused (${late.status})`);
   });
 
   await step('uploaded documents: attached ones are protected, unattached drafts can be removed', async () => {
