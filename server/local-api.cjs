@@ -641,6 +641,8 @@ const WEATHER_FETCH_TIMEOUT_MS = 8000
 const WEATHER_USER_AGENT = `SmartFarming/1.0 (+${String(process.env.PUBLIC_APP_URL || process.env.OPENROUTER_SITE_URL || 'https://github.com/miad979/smart_farming').trim()})`
 const PLACE_NAME_CACHE = new Map()
 const PLACE_NAME_CACHE_TTL_MS = 24 * 60 * 60 * 1000
+// A failed lookup is retried after 10 minutes instead of leaving the place name empty all day.
+const PLACE_NAME_FAILURE_TTL_MS = 10 * 60 * 1000
 
 async function fetchJsonWithTimeout(url, { timeoutMs = WEATHER_FETCH_TIMEOUT_MS, headers = {} } = {}) {
   const response = await fetch(url, {
@@ -659,7 +661,7 @@ async function fetchJsonWithTimeout(url, { timeoutMs = WEATHER_FETCH_TIMEOUT_MS,
 async function resolveLocationName(lat, lng) {
   const key = `${Number(lat).toFixed(2)},${Number(lng).toFixed(2)}`
   const cached = PLACE_NAME_CACHE.get(key)
-  if (cached && Date.now() - cached.at < PLACE_NAME_CACHE_TTL_MS) return cached.value
+  if (cached && Date.now() - cached.at < (cached.value ? PLACE_NAME_CACHE_TTL_MS : PLACE_NAME_FAILURE_TTL_MS)) return cached.value
   let value = null
   try {
     const params = new URLSearchParams({ lat: String(lat), lon: String(lng), format: 'jsonv2', zoom: '10', 'accept-language': 'en' })
@@ -671,9 +673,11 @@ async function resolveLocationName(lat, lng) {
       admin2: address.state_district || address.county || null,
       country: address.country || null,
     }
-  } catch {
+  } catch (error) {
     value = null
+    console.warn(`[weather] place name lookup failed: ${error?.name === 'TimeoutError' ? 'timeout' : (error?.message || 'failed')}`)
   }
+  if (value && !value.name) value = null
   PLACE_NAME_CACHE.set(key, { at: Date.now(), value })
   return value
 }
