@@ -43,6 +43,12 @@ All variables are listed in `.env.production.example`.
 
 ## 2. Deploy on Render
 
+### Free tier
+- `render.yaml` uses `plan: free`. The service sleeps after 15 minutes without traffic; the first visit then
+  takes about a minute (realtime connections reconnect automatically). Switch to `starter` for always-on.
+- Render's free Postgres **expires 30 days after creation**. For a free database that does not expire, use
+  [Neon](https://neon.tech) (free plan) and paste its connection string as `DATABASE_URL` (`SQL_SSL=require` is already set).
+
 1. Create a Postgres database (Render → **New → Postgres**, or Supabase/Neon). Copy its **external** connection string.
 2. Render → **New → Blueprint** → select this repository. Render reads `render.yaml`.
 3. Fill in the variables marked *sync: false*: `DATABASE_URL`, `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`,

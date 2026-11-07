@@ -2,7 +2,9 @@ services:
   - type: web
     name: smart-farming-runtime
     runtime: node
-    plan: starter
+    # Free instance: sleeps after 15 min without traffic (first request then takes ~1 min) and has
+    # 750 instance hours/month. Change to `starter` for always-on hosting.
+    plan: free
     # Deploy only after the GitHub CI checks (UI smoke, security) pass on the pushed commit.
     autoDeployTrigger: checksPass
     healthCheckPath: /api/health
