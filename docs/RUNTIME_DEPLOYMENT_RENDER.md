@@ -53,7 +53,7 @@ All variables are listed in `.env.production.example`.
 2. Render → **New → Blueprint** → select this repository. Render reads `render.yaml`.
 3. Fill in the variables marked *sync: false*: `DATABASE_URL`, `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`,
    and any API keys. Change `CORS_ALLOWED_ORIGINS` / `OPENROUTER_SITE_URL` if your service URL or custom domain differs.
-4. Deploy. Render builds with `npm ci --ignore-scripts && npm run build` on Node 22 (`.node-version`).
+4. Deploy. Render builds with `npm ci --ignore-scripts --include=dev && npm run build` on Node 22 (`.node-version`).
 
 How later deploys happen:
 - `render.yaml` sets `autoDeployTrigger: checksPass`: on each push to the branch, Render waits for the GitHub
