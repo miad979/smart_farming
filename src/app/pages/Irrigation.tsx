@@ -50,18 +50,11 @@ type IrrigationData = {
 const DEFAULT_IRRIGATION: IrrigationData = {
   autoMode: true,
   moisture: 68,
-  nextWatering: 'Tomorrow 6 AM',
-  nextWatering_bn: 'আগামীকাল সকাল ৬টা',
-  amount: '45L',
-  usage: [
-    { day: 'Mon', day_bn: 'সোম', amount: 120 },
-    { day: 'Tue', day_bn: 'মঙ্গল', amount: 140 },
-    { day: 'Wed', day_bn: 'বুধ', amount: 100 },
-    { day: 'Thu', day_bn: 'বৃহস্পতি', amount: 160 },
-    { day: 'Fri', day_bn: 'শুক্র', amount: 130 },
-    { day: 'Sat', day_bn: 'শনি', amount: 150 },
-    { day: 'Sun', day_bn: 'রবি', amount: 110 },
-  ],
+  // Neutral placeholders until the real schedule loads (no invented history).
+  nextWatering: 'Automatic, when moisture drops below the crop threshold',
+  nextWatering_bn: 'স্বয়ংক্রিয়: আর্দ্রতা ফসলের সীমার নিচে নামলে',
+  amount: '0L',
+  usage: [],
   sensorHistory: [
     {
       id: 'seed-tick',
@@ -133,6 +126,10 @@ const CROP_PROFILES: Record<string, { crop_bn: string; threshold: number; maxVol
   Vegetables: { crop_bn: 'সবজি', threshold: 62, maxVolume: 95 },
   Potato: { crop_bn: 'আলু', threshold: 60, maxVolume: 105 },
 };
+
+// How often the virtual sensor reports while auto mode is on. Each reading is a server request that also saves
+// state, so this is kept modest for free hosting tiers (was effectively ~1 s through a re-render loop).
+const AUTO_TICK_INTERVAL_MS = 15000;
 
 export const Irrigation: React.FC = () => {
   const FALLBACK_COORDS = { lat: 23.8103, lng: 90.4125 };
@@ -378,6 +375,8 @@ export const Irrigation: React.FC = () => {
       manualLiters?: number;
       manualRuntimeMinutes?: number;
       tickMode?: 'decision' | 'sensor-only';
+      /** Automatic background tick: must not lock the farmer's buttons while it runs. */
+      background?: boolean;
     },
   ) => {
     if (state.userMode === 'guest' || !state.accessToken) return;
@@ -387,7 +386,7 @@ export const Irrigation: React.FC = () => {
     }
     if (!device?.id) return;
 
-    setSimulating(true);
+    if (!options?.background) setSimulating(true);
     try {
       const result = await simulateVirtualIrrigationTick(state.accessToken, device.id, {
         crop: cropName || data.policy.crop,
@@ -412,20 +411,33 @@ export const Irrigation: React.FC = () => {
         setData(normalizedSchedule);
         setAutoMode(!!normalizedSchedule.autoMode);
       }
-      setLastPumpSimulation({
-        action: result?.action || 'idle',
-        message: result?.message || '',
-        appliedLiters: Number(result?.appliedLiters || 0),
-        runtimeSeconds: Number(result?.runtimeSeconds || 0),
-        targetLiters: Number(result?.targetLiters || 0),
-        pumpCapacityLpm: Number(result?.pumpCapacityLpm || 0),
-      });
+      // While a run is in progress the server only reports status; keep the run's own progress details.
+      if (result?.message !== 'Pump run in progress') {
+        setLastPumpSimulation({
+          action: result?.action || 'idle',
+          message: result?.message || '',
+          appliedLiters: Number(result?.appliedLiters || 0),
+          runtimeSeconds: Number(result?.runtimeSeconds || 0),
+          targetLiters: Number(result?.targetLiters || 0),
+          pumpCapacityLpm: Number(result?.pumpCapacityLpm || 0),
+        });
+      }
       setLastUpdated(new Date());
     } catch (error) {
       console.error('Failed to simulate virtual device tick:', error);
     } finally {
-      setSimulating(false);
+      if (!options?.background) setSimulating(false);
     }
+  };
+
+  // Latest values for the automatic tick timer (read via refs so the timer is not re-created on every change).
+  const simulateVirtualTickRef = useRef(simulateVirtualTick);
+  simulateVirtualTickRef.current = simulateVirtualTick;
+  const autoTickStateRef = useRef({ autoMode, crop: data.policy?.crop || 'Rice', actuatorState: '' });
+  autoTickStateRef.current = {
+    autoMode,
+    crop: data.policy?.crop || 'Rice',
+    actuatorState: String(virtualDevice?.actuatorState || '').toLowerCase(),
   };
 
   const formatLastUpdated = (value: Date | null) => {
@@ -495,7 +507,7 @@ export const Irrigation: React.FC = () => {
     return latestSensorTick?.action === 'watering';
   }, [virtualDevice?.actuatorState, latestSensorTick?.action]);
 
-  const autoSimulationIntervalMs = pumpIsActive ? 1000 : 3000;
+  const autoSimulationIntervalMs = AUTO_TICK_INTERVAL_MS;
 
   const formattedVirtualDeviceLastSync = useMemo(() => {
     const raw = virtualDevice?.lastSync;
@@ -810,66 +822,27 @@ export const Irrigation: React.FC = () => {
   ]);
 
   useEffect(() => {
-    if (!autoMode || state.userMode === 'guest' || !state.accessToken) return;
-    if (String(virtualDevice?.actuatorState || '').toLowerCase() === 'watering') return;
-
-    const sensedMoisture = Number(virtualDevice?.telemetry?.soilMoisture);
-    if (!Number.isFinite(sensedMoisture)) return;
-
-    const nowMs = Date.now();
-    if (nowMs - lastRealtimeAutoTickAtRef.current < 1200) return;
-    if (autoTickInFlightRef.current) return;
-    lastRealtimeAutoTickAtRef.current = nowMs;
-    autoTickInFlightRef.current = true;
-
-    void simulateVirtualTick(data.policy?.crop || 'Rice', {
-      measuredMoisture: sensedMoisture,
-    }).finally(() => {
-      autoTickInFlightRef.current = false;
-    });
-  }, [
-    autoMode,
-    state.userMode,
-    state.accessToken,
-    data.policy?.crop,
-    virtualDevice?.actuatorState,
-    virtualDevice?.telemetry?.soilMoisture,
-  ]);
-
-  useEffect(() => {
+    // One stable timer: a virtual sensor reading every AUTO_TICK_INTERVAL_MS while auto mode is on.
+    // The server simulates the soil drying (no moisture is sent), so auto mode can trigger watering by itself.
     if (!autoMode || !autoSimulation || state.userMode === 'guest' || !state.accessToken) return;
     lastRealtimeAutoTickAtRef.current = Date.now();
     const runRealtimeTick = () => {
-      if (!autoMode) return;
-      if (String(virtualDevice?.actuatorState || '').toLowerCase() === 'watering') return;
+      const current = autoTickStateRef.current;
+      if (!current.autoMode) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return; // background tab
+      if (current.actuatorState === 'watering') return; // the server ends the run; no ticks meanwhile
       if (autoTickInFlightRef.current) return;
 
-      const sensedMoisture = Number(virtualDevice?.telemetry?.soilMoisture ?? data.moisture);
       autoTickInFlightRef.current = true;
-      void simulateVirtualTick(
-        data.policy?.crop || 'Rice',
-        Number.isFinite(sensedMoisture) ? { measuredMoisture: sensedMoisture } : undefined,
-      ).finally(() => {
+      lastRealtimeAutoTickAtRef.current = Date.now();
+      void simulateVirtualTickRef.current(current.crop, { background: true }).finally(() => {
         autoTickInFlightRef.current = false;
       });
     };
 
-    runRealtimeTick();
-    const timer = setInterval(runRealtimeTick, autoSimulationIntervalMs);
-
+    const timer = setInterval(runRealtimeTick, AUTO_TICK_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [
-    autoMode,
-    autoSimulation,
-    autoSimulationIntervalMs,
-    state.userMode,
-    state.accessToken,
-    data.policy?.crop,
-    data.moisture,
-    virtualDevice?.id,
-    virtualDevice?.actuatorState,
-    virtualDevice?.telemetry?.soilMoisture,
-  ]);
+  }, [autoMode, autoSimulation, state.userMode, state.accessToken]);
 
   useEffect(() => {
     if (!pumpIsActive) return;
@@ -1065,8 +1038,8 @@ export const Irrigation: React.FC = () => {
         ...prev,
         moisture: nextMoisture,
         amount: `${manualLiters}L`,
-        nextWatering: 'Tomorrow 6 AM',
-        nextWatering_bn: 'আগামীকাল সকাল ৬টা',
+        nextWatering: 'Demo mode — sign in to control a real schedule',
+        nextWatering_bn: 'ডেমো মোড — আসল সেচ নিয়ন্ত্রণের জন্য সাইন ইন করুন',
       }));
       setLastPumpSimulation({
         action: 'watering',
@@ -1151,8 +1124,15 @@ export const Irrigation: React.FC = () => {
     });
   };
 
+  // Enter and blur both commit; skip unchanged values so leaving the field (e.g. by clicking the auto-mode
+  // toggle) does not start a redundant save that briefly disables the control being clicked.
   const commitLandAreaInput = async () => {
-    await handleLandAreaChange(Number(landAreaInput));
+    const next = normalizeLandAreaAcres(Number(landAreaInput));
+    if (next === normalizeLandAreaAcres(data.policy?.landAreaAcres ?? 1)) {
+      setLandAreaInput(String(next));
+      return;
+    }
+    await handleLandAreaChange(next);
   };
 
   const handlePumpCapacityChange = async (nextValue: number) => {
@@ -1169,6 +1149,7 @@ export const Irrigation: React.FC = () => {
   };
 
   const commitPumpCapacityInput = async () => {
+    if (Number(pumpCapacityInput) === Number(data.policy?.pumpCapacityLpm)) return;
     await handlePumpCapacityChange(Number(pumpCapacityInput));
   };
 
@@ -1186,6 +1167,7 @@ export const Irrigation: React.FC = () => {
   };
 
   const commitMaxCycleMinutesInput = async () => {
+    if (Number(maxCycleMinutesInput) === Number(data.policy?.maxCycleMinutes)) return;
     await handleMaxCycleMinutesChange(Number(maxCycleMinutesInput));
   };
 

@@ -46,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Doctors could not upload the same certificate/resume again after an earlier failed or abandoned attempt ("already uploaded"); a leftover copy is now reused, only a document already on another registered account is refused, and picking the same file again in the file picker works
 
+- Irrigation: auto mode now waters by itself as the soil dries (the page used to pin the moisture value); the server ends pump runs on time even if the page is closed; no more invented weekly usage, "45L" or fixed "Tomorrow 6 AM" (real per-date usage and next-watering text); crop changes bring their own threshold; sensor ticks no longer revert saved settings; ~1 request/15 s instead of a re-render loop; background ticks no longer disable the Water Now / Stop buttons; battery drains by time
+- All requests now share one in-memory copy of the data, so two simultaneous requests can no longer overwrite each other's changes (and requests no longer reload the whole database from disk and Postgres)
+- Google Fonts (incl. Noto Sans Bengali) were blocked by the production Content Security Policy
+
 ### Deployment
 - Production refuses to start without `DATABASE_URL` (or an explicit `ALLOW_EPHEMERAL_STORAGE=true`) and without `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD`
 - Uploaded documents are stored in Postgres (`app_uploaded_files`) and restored after a redeploy wipes the disk

@@ -33,18 +33,11 @@ type IrrigationData = {
 const DEFAULT_IRRIGATION: IrrigationData = {
   autoMode: true,
   moisture: 68,
-  nextWatering: 'Tomorrow 6 AM',
-  nextWatering_bn: 'আগামীকাল সকাল ৬টা',
-  amount: '45L',
-  usage: [
-    { day: 'Mon', day_bn: 'সোম', amount: 120 },
-    { day: 'Tue', day_bn: 'মঙ্গল', amount: 140 },
-    { day: 'Wed', day_bn: 'বুধ', amount: 100 },
-    { day: 'Thu', day_bn: 'বৃহস্পতি', amount: 160 },
-    { day: 'Fri', day_bn: 'শুক্র', amount: 130 },
-    { day: 'Sat', day_bn: 'শনি', amount: 150 },
-    { day: 'Sun', day_bn: 'রবি', amount: 110 },
-  ],
+  // Neutral placeholders until the real schedule loads (no invented history).
+  nextWatering: 'Automatic, when moisture drops below the crop threshold',
+  nextWatering_bn: 'স্বয়ংক্রিয়: আর্দ্রতা ফসলের সীমার নিচে নামলে',
+  amount: '0L',
+  usage: [],
   alerts: [],
   policy: {
     crop: 'Rice',

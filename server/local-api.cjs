@@ -1002,18 +1002,12 @@ function createDefaultIrrigationSchedule(userId, cropName = 'Rice') {
     userId,
     autoMode: true,
     moisture: 68,
-    nextWatering: 'Tomorrow 6 AM',
-    nextWatering_bn: 'আগামীকাল সকাল ৬টা',
-    amount: '45L',
-    usage: [
-      { id: 'usage-mon', day: 'Mon', day_bn: 'সোম', amount: 120 },
-      { id: 'usage-tue', day: 'Tue', day_bn: 'মঙ্গল', amount: 140 },
-      { id: 'usage-wed', day: 'Wed', day_bn: 'বুধ', amount: 100 },
-      { id: 'usage-thu', day: 'Thu', day_bn: 'বৃহস্পতি', amount: 160 },
-      { id: 'usage-fri', day: 'Fri', day_bn: 'শুক্র', amount: 130 },
-      { id: 'usage-sat', day: 'Sat', day_bn: 'শনি', amount: 150 },
-      { id: 'usage-sun', day: 'Sun', day_bn: 'রবি', amount: 110 },
-    ],
+    // Filled in by normalizeIrrigationSchedule (real values, never invented history).
+    nextWatering: '',
+    nextWatering_bn: '',
+    amount: '0L',
+    usageByDate: {},
+    usage: [],
     sensorHistory: [
       {
         id: id('sensor_tick'),
@@ -1040,21 +1034,109 @@ function createDefaultIrrigationSchedule(userId, cropName = 'Rice') {
   }
 }
 
-function upsertIrrigationUsageForToday(schedule, liters) {
-  const amount = Math.max(0, Number(liters || 0))
-  const day = new Date().toLocaleDateString('en-US', { weekday: 'short' })
-  const day_bn = dayBn(day)
-  const usage = Array.isArray(schedule.usage) ? [...schedule.usage] : []
-  const idx = usage.findIndex((item) => item?.day === day)
-  if (idx >= 0) {
-    usage[idx] = {
-      ...usage[idx],
-      amount: Math.max(0, Number(usage[idx].amount || 0) + amount),
-    }
-  } else {
-    usage.push({ id: id('usage'), day, day_bn, amount })
+// Calendar days are counted in the farm's time zone (default Bangladesh), not the server's (UTC on hosts).
+const APP_TIMEZONE = String(process.env.APP_TIMEZONE || 'Asia/Dhaka').trim() || 'Asia/Dhaka'
+
+function farmDateKey(date = new Date()) {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: APP_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date)
+  } catch {
+    return date.toISOString().slice(0, 10)
   }
-  return usage
+}
+
+/**
+ * Water applied per calendar day. Replaces the old per-weekday totals, which never reset (every Monday added
+ * to all previous Mondays) and were pre-filled with invented numbers for new farmers.
+ */
+function recordIrrigationUsage(schedule, liters, date = new Date()) {
+  const amount = Math.max(0, Math.round(Number(liters || 0)))
+  const usageByDate = { ...(schedule.usageByDate || {}) }
+  const key = farmDateKey(date)
+  usageByDate[key] = Math.max(0, Number(usageByDate[key] || 0)) + amount
+  // Keep about a month of history.
+  for (const k of Object.keys(usageByDate).sort().slice(0, -31)) delete usageByDate[k]
+  return usageByDate
+}
+
+/** The last 7 calendar days (oldest first, ending today) for the Weekly Usage chart. */
+function buildWeeklyUsage(usageByDate = {}, now = new Date()) {
+  const days = []
+  for (let i = 6; i >= 0; i -= 1) {
+    const date = new Date(now.getTime() - i * 86400000)
+    const key = farmDateKey(date)
+    const day = new Intl.DateTimeFormat('en-US', { timeZone: APP_TIMEZONE, weekday: 'short' }).format(date)
+    days.push({ id: `usage-${key}`, date: key, day, day_bn: dayBn(day), amount: Math.max(0, Number(usageByDate[key] || 0)) })
+  }
+  return days
+}
+
+/** Human-readable "next watering" that reflects the real mode, moisture and threshold. */
+function describeNextWatering(schedule, device) {
+  const threshold = Number(schedule?.policy?.threshold || 60)
+  const moisture = Math.round(Number(schedule?.moisture ?? 0))
+  const runEndsAt = Date.parse(device?.pumpRunEndsAt || '')
+  if (String(device?.actuatorState || '') === 'watering' && Number.isFinite(runEndsAt) && runEndsAt > Date.now()) {
+    const mins = Math.max(1, Math.ceil((runEndsAt - Date.now()) / 60000))
+    return { en: `Watering now (about ${mins} min left)`, bn: `এখন সেচ চলছে (প্রায় ${mins} মিনিট বাকি)` }
+  }
+  if (!schedule?.autoMode) {
+    return { en: 'Manual mode — press Water Now when needed', bn: 'ম্যানুয়াল মোড — প্রয়োজন হলে "এখন পানি দিন" চাপুন' }
+  }
+  if (moisture < threshold) {
+    return { en: `Due now: moisture ${moisture}% is below ${threshold}%`, bn: `এখনই প্রয়োজন: আর্দ্রতা ${moisture}%, সীমা ${threshold}%` }
+  }
+  return { en: `Automatic, when moisture drops below ${threshold}% (now ${moisture}%)`, bn: `স্বয়ংক্রিয়: আর্দ্রতা ${threshold}%-এর নিচে নামলে (এখন ${moisture}%)` }
+}
+
+/**
+ * Brings a stored schedule up to date before it is returned or changed: per-date usage (legacy weekday
+ * totals, which included invented seed numbers, are dropped), and real next-watering text.
+ */
+function normalizeIrrigationSchedule(schedule, device) {
+  if (!schedule) return schedule
+  if (!schedule.usageByDate || typeof schedule.usageByDate !== 'object') {
+    schedule.usageByDate = {}
+    const everWatered = (schedule.sensorHistory || []).some((h) => h?.action === 'watering')
+    if (!everWatered && schedule.amount === '45L') schedule.amount = '0L' // the old invented default
+  }
+  schedule.usage = buildWeeklyUsage(schedule.usageByDate)
+  const next = describeNextWatering(schedule, device)
+  schedule.nextWatering = next.en
+  schedule.nextWatering_bn = next.bn
+  return schedule
+}
+
+/** The user's virtual soil sensor, if any. */
+function findUserVirtualDevice(db, userId) {
+  return (db.devicesByUser?.[userId] || []).map((did) => db.devices?.[did])
+    .find((d) => d && d.mode === 'virtual' && d.type === 'virtual_soil_sensor') || null
+}
+
+/**
+ * The server, not the browser, decides when a pump run is over: a run ends at pumpRunEndsAt even if the page
+ * was closed mid-run. Also drains the battery by elapsed time (2 %/hour) instead of per request.
+ * Returns true when the device changed.
+ */
+function settleVirtualDevice(device, now = Date.now()) {
+  if (!device) return false
+  let changed = false
+  const endsAt = Date.parse(device.pumpRunEndsAt || '')
+  if (String(device.actuatorState) === 'watering' && (!Number.isFinite(endsAt) || endsAt <= now)) {
+    device.actuatorState = 'idle'
+    device.pumpRunEndsAt = null
+    changed = true
+  }
+  const lastBatteryAt = Date.parse(device.batteryUpdatedAt || device.lastSync || '') || now
+  const hours = Math.max(0, (now - lastBatteryAt) / 3600000)
+  if (hours >= 0.05) {
+    const telemetry = { ...(device.telemetry || {}) }
+    telemetry.battery = Math.max(5, Math.round((Number(telemetry.battery ?? 100) - hours * 2) * 10) / 10)
+    device.telemetry = telemetry
+    device.batteryUpdatedAt = new Date(now).toISOString()
+    changed = true
+  }
+  return changed
 }
 
 function appendSensorHistory(schedule, { measuredMoisture, moisture, action, appliedLiters, runtimeSeconds, flowRateLpm, targetLiters }) {
@@ -1142,7 +1224,7 @@ function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
     reason = cycle.cappedByCycle
       ? `Manual watering partially delivered due to cycle limit (${maxCycleMinutes} min)`
       : `Manual watering delivered using ${pumpCapacityLpm} L/min capacity`
-    nextSchedule.usage = upsertIrrigationUsageForToday(nextSchedule, appliedLiters)
+    nextSchedule.usageByDate = recordIrrigationUsage(nextSchedule, appliedLiters)
   } else if (forcePump === 'off') {
     nextSchedule.amount = '0L'
     nextSchedule.nextWatering = 'Pump forced OFF for simulation'
@@ -1191,7 +1273,7 @@ function runAutoIrrigationDecision(schedule, measuredMoisture, options = {}) {
     reason = cycle.cappedByCycle
       ? `Auto watering reached cycle limit (${maxCycleMinutes} min); remaining demand carries to next tick`
       : 'Automatic irrigation applied from virtual sensor'
-    nextSchedule.usage = upsertIrrigationUsageForToday(nextSchedule, appliedLiters)
+    nextSchedule.usageByDate = recordIrrigationUsage(nextSchedule, appliedLiters)
   } else {
     nextSchedule.amount = nextSchedule.amount || '0L'
     nextSchedule.nextWatering = nextSchedule.nextWatering || 'Monitor in 2 hours'
@@ -1908,7 +1990,7 @@ function removeUploadedDocument(db, fileName) {
   delete db.uploaded_documents[fileName]
 }
 
-async function loadDb() {
+async function loadDbFromStorage() {
   const localDbExists = fs.existsSync(DB_PATH)
   const localDbMtimeMs = localDbExists
     ? (() => {
@@ -1995,10 +2077,45 @@ async function loadDb() {
   return db
 }
 
+// --- Shared in-memory state ---------------------------------------------------------------------------
+// All requests work on ONE in-memory copy of the state. Previously every request loaded its own copy from
+// disk and saved the whole thing back, so two concurrent requests silently overwrote each other's changes
+// (e.g. an irrigation sensor tick reverting the farmer's crop or auto-mode change). The copy is reloaded
+// only when the data file was changed by something else (tests, sync scripts) or on first use.
+// This matches the documented single-instance deployment.
+let cachedDb = null
+let cachedDbFileMtimeMs = -1
+let cachedDbLoadPromise = null
+
+function currentDbFileMtimeMs() {
+  try {
+    return fs.statSync(DB_PATH).mtimeMs
+  } catch {
+    return -1
+  }
+}
+
+async function loadDb() {
+  if (cachedDb && currentDbFileMtimeMs() === cachedDbFileMtimeMs) return cachedDb
+  if (!cachedDbLoadPromise) {
+    cachedDbLoadPromise = (async () => {
+      const db = await loadDbFromStorage()
+      cachedDb = db
+      cachedDbFileMtimeMs = currentDbFileMtimeMs()
+      return db
+    })().finally(() => {
+      cachedDbLoadPromise = null
+    })
+  }
+  return cachedDbLoadPromise
+}
+
 function saveDb(db) {
   ensureSystemStorageTables(db)
   normalizeAllPrices(db)
   fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), 'utf8')
+  cachedDb = db
+  cachedDbFileMtimeMs = currentDbFileMtimeMs()
   scheduleSqlSnapshotWrite(db)
 }
 
@@ -5160,11 +5277,14 @@ function createLocalApiMiddleware() {
         const userId = pathname.split('/').pop()
         if (!userId || userId !== authId) return send(res, 403, { error: 'Forbidden' })
         let schedule = db.irrigation[userId]
+        const device = findUserVirtualDevice(db, userId)
+        const deviceChanged = settleVirtualDevice(device)
         if (!schedule) {
           schedule = createDefaultIrrigationSchedule(userId)
           db.irrigation[userId] = schedule
-          saveDb(db)
         }
+        normalizeIrrigationSchedule(schedule, device)
+        if (deviceChanged || !db.irrigation[userId].usageByDate) saveDb(db)
         return send(res, 200, {
           schedule,
           helpLineNumber: getDeviceHelpLineNumber(db),
@@ -5177,12 +5297,17 @@ function createLocalApiMiddleware() {
         if (!authId) return send(res, 401, { error: 'Unauthorized' })
         const userId = pathname.split('/').pop()
         if (!userId || userId !== authId) return send(res, 403, { error: 'Forbidden' })
-        const updates = await readJsonBody(req)
+        const updates = (await readJsonBody(req)) || {}
         const existing = db.irrigation[userId] || createDefaultIrrigationSchedule(userId)
-        let schedule = { ...existing, ...updates, id: userId, userId, updatedAt: nowIso() }
+        // Only real settings can be changed here; measured data (moisture, usage, history) comes from the
+        // sensor/pump and is never taken from the browser.
+        const schedule = { ...existing, id: userId, userId, updatedAt: nowIso() }
+        if (typeof updates.autoMode === 'boolean') schedule.autoMode = updates.autoMode
 
-        const nextCrop = updates?.policy?.crop || updates?.crop || schedule?.policy?.crop || existing?.policy?.crop || 'Rice'
+        const nextCrop = updates?.policy?.crop || updates?.crop || existing?.policy?.crop || 'Rice'
         const profile = getIrrigationCropPolicy(nextCrop)
+        // A different crop brings its own moisture threshold and irrigation window.
+        const cropChanged = profile.crop !== existing?.policy?.crop
         const nextLandAreaAcres = normalizeLandAreaAcres(
           updates?.policy?.landAreaAcres
             ?? schedule?.policy?.landAreaAcres
@@ -5202,18 +5327,19 @@ function createLocalApiMiddleware() {
         )
 
         schedule.policy = {
-          ...(schedule.policy || {}),
+          ...(existing.policy || {}),
           crop: profile.crop,
           crop_bn: profile.crop_bn,
-          threshold: Number(schedule?.policy?.threshold || profile.threshold),
-          window: schedule?.policy?.window || profile.window,
+          threshold: cropChanged ? profile.threshold : Number(existing?.policy?.threshold || profile.threshold),
+          window: cropChanged ? profile.window : (existing?.policy?.window || profile.window),
           landAreaAcres: nextLandAreaAcres,
           maxVolume: calculateIrrigationMaxVolume(profile.crop, nextLandAreaAcres),
           pumpCapacityLpm: nextPumpCapacityLpm,
           maxCycleMinutes: nextMaxCycleMinutes,
-          alarmTickThreshold: normalizeAlarmTickThreshold(schedule?.policy?.alarmTickThreshold),
+          alarmTickThreshold: normalizeAlarmTickThreshold(updates?.policy?.alarmTickThreshold ?? existing?.policy?.alarmTickThreshold),
         }
 
+        normalizeIrrigationSchedule(schedule, findUserVirtualDevice(db, userId))
         db.irrigation[userId] = schedule
         saveDb(db)
         emitRealtime(`irrigation:${userId}`, { action: 'update', schedule }, userId)
@@ -5607,7 +5733,8 @@ function createLocalApiMiddleware() {
         if (!authId) return send(res, 401, { error: 'Unauthorized' })
 
         const body = await readJsonBody(req)
-        const requestedCrop = typeof body?.crop === 'string' ? body.crop : 'Rice'
+        // Saved settings win; the request's crop is only used for a brand-new schedule.
+        const requestedCrop = db.irrigation[authId]?.policy?.crop || (typeof body?.crop === 'string' ? body.crop : 'Rice')
         const cropProfile = getIrrigationCropPolicy(requestedCrop)
 
         db.devicesByUser[authId] ||= []
@@ -5642,18 +5769,18 @@ function createLocalApiMiddleware() {
 
         const existingSchedule = db.irrigation[authId] || createDefaultIrrigationSchedule(authId, cropProfile.crop)
         const setupLandAreaAcres = normalizeLandAreaAcres(
-          body?.landAreaAcres
-            ?? existingSchedule?.policy?.landAreaAcres
+          existingSchedule?.policy?.landAreaAcres
+            ?? body?.landAreaAcres
             ?? 1,
         )
         const setupPumpCapacityLpm = normalizePumpCapacityLpm(
-          body?.pumpCapacityLpm
-            ?? existingSchedule?.policy?.pumpCapacityLpm,
+          existingSchedule?.policy?.pumpCapacityLpm
+            ?? body?.pumpCapacityLpm,
           setupLandAreaAcres,
         )
         const setupMaxCycleMinutes = normalizeMaxCycleMinutes(
-          body?.maxCycleMinutes
-            ?? existingSchedule?.policy?.maxCycleMinutes,
+          existingSchedule?.policy?.maxCycleMinutes
+            ?? body?.maxCycleMinutes,
         )
         const schedule = {
           ...existingSchedule,
@@ -5674,6 +5801,8 @@ function createLocalApiMiddleware() {
           updatedAt: nowIso(),
         }
 
+        settleVirtualDevice(device)
+        normalizeIrrigationSchedule(schedule, device)
         db.irrigation[authId] = schedule
         saveDb(db)
         emitRealtime(`irrigation:${authId}`, { action: 'update', schedule }, authId)
@@ -5698,23 +5827,45 @@ function createLocalApiMiddleware() {
         if (device.userId !== authId) return send(res, 403, { error: 'Forbidden' })
 
         const body = await readJsonBody(req)
-        const cropInput = typeof body?.crop === 'string' ? body.crop : (db.irrigation[authId]?.policy?.crop || 'Rice')
+        // The saved crop always wins: a sensor tick sent with a stale crop from the page must not undo the
+        // farmer's latest change. (The body crop is only used before any schedule exists.)
+        const cropInput = db.irrigation[authId]?.policy?.crop || (typeof body?.crop === 'string' ? body.crop : 'Rice')
         const cropProfile = getIrrigationCropPolicy(cropInput)
 
         const existingSchedule = db.irrigation[authId] || createDefaultIrrigationSchedule(authId, cropProfile.crop)
+
+        // End a finished pump run first. While a run is still going, an automatic tick does not start a new
+        // decision; the farmer can still stop it (forcePump: 'off') or start another manual run.
+        settleVirtualDevice(device)
+        const pumpStillRunning = String(device.actuatorState) === 'watering'
+        if (pumpStillRunning && !normalizeForcedPumpAction(body?.forcePump)) {
+          normalizeIrrigationSchedule(existingSchedule, device)
+          return send(res, 200, {
+            device,
+            schedule: existingSchedule,
+            helpLineNumber: getDeviceHelpLineNumber(db),
+            action: 'watering',
+            appliedLiters: 0,
+            runtimeSeconds: Math.max(0, Math.round((Date.parse(device.pumpRunEndsAt || '') - Date.now()) / 1000)),
+            targetLiters: 0,
+            pumpCapacityLpm: normalizePumpCapacityLpm(existingSchedule?.policy?.pumpCapacityLpm, existingSchedule?.policy?.landAreaAcres),
+            message: 'Pump run in progress',
+          })
+        }
+        // Saved settings win over values sent with the tick (which can be stale), for the same reason as the crop.
         const simulationLandAreaAcres = normalizeLandAreaAcres(
-          body?.landAreaAcres
-            ?? existingSchedule?.policy?.landAreaAcres
+          existingSchedule?.policy?.landAreaAcres
+            ?? body?.landAreaAcres
             ?? 1,
         )
         const simulationPumpCapacityLpm = normalizePumpCapacityLpm(
-          body?.pumpCapacityLpm
-            ?? existingSchedule?.policy?.pumpCapacityLpm,
+          existingSchedule?.policy?.pumpCapacityLpm
+            ?? body?.pumpCapacityLpm,
           simulationLandAreaAcres,
         )
         const simulationMaxCycleMinutes = normalizeMaxCycleMinutes(
-          body?.maxCycleMinutes
-            ?? existingSchedule?.policy?.maxCycleMinutes,
+          existingSchedule?.policy?.maxCycleMinutes
+            ?? body?.maxCycleMinutes,
         )
         const currentMoisture = Number(existingSchedule.moisture ?? device?.telemetry?.soilMoisture ?? 68)
         const measuredInput = Number(body?.measuredMoisture)
@@ -5793,19 +5944,24 @@ function createLocalApiMiddleware() {
         })
         db.irrigation[authId] = schedule
 
+        const nowMs = Date.now()
         const updatedDevice = {
           ...device,
           actuatorState: action,
+          // The server tracks when the run ends, so the pump switches off even if the page is closed.
+          pumpRunStartedAt: action === 'watering' ? new Date(nowMs).toISOString() : null,
+          pumpRunEndsAt: action === 'watering' ? new Date(nowMs + Math.max(1, Number(runtimeSeconds || 0)) * 1000).toISOString() : null,
           telemetry: {
             ...(device.telemetry || {}),
             soilMoisture: schedule.moisture,
-            battery: Math.max(5, Number(device?.telemetry?.battery || 100) - (action === 'watering' ? 1 : 0.2)),
+            // Battery drains by elapsed time in settleVirtualDevice, not per request.
             temperature: Math.max(18, Math.min(42, Number(device?.telemetry?.temperature || 29) + Math.round((Math.random() * 4) - 2))),
             humidity: Math.max(30, Math.min(95, Number(device?.telemetry?.humidity || 72) + Math.round((Math.random() * 6) - 3))),
           },
           lastSync: nowIso(),
         }
         db.devices[deviceId] = updatedDevice
+        normalizeIrrigationSchedule(schedule, updatedDevice)
         saveDb(db)
 
         emitRealtime(`irrigation:${authId}`, { action: 'update', schedule }, authId)
@@ -5861,6 +6017,9 @@ function createLocalApiMiddleware() {
         if (!authId) return send(res, 401, { error: 'Unauthorized' })
         const ids = db.devicesByUser[authId] || []
         const devices = ids.map((did) => db.devices[did]).filter(Boolean)
+        // Finished pump runs end here too (e.g. the page was closed during watering).
+        const changed = devices.map((d) => settleVirtualDevice(d)).some(Boolean)
+        if (changed) saveDb(db)
         return send(res, 200, { devices })
       }
 
