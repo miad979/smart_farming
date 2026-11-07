@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Avatar, AvatarFallback } from '../components/ui/avatar';
 import { Input } from '../components/ui/input';
 import { toast } from 'sonner';
+import { useLiveRefresh } from '../hooks/useLiveRefresh';
 
 export const AdminDoctorVerification: React.FC = () => {
   const { state } = useApp();
@@ -28,18 +29,22 @@ export const AdminDoctorVerification: React.FC = () => {
   const rejectedDoctors = useMemo(() => doctors.filter(d => d.verificationStatus === 'rejected'), [doctors]);
   const suspendedDoctors = useMemo(() => doctors.filter(d => d.verificationStatus === 'suspended'), [doctors]);
 
-  const refresh = async () => {
+  const refresh = async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!state.accessToken) return;
     try {
-      setError(null);
-      setIsLoading(true);
+      if (!silent) {
+        setError(null);
+        setIsLoading(true);
+      }
       const { users } = await api.getAllUsers(state.accessToken);
       const allDoctors = (users || []).filter((u: any) => u.role === 'doctor');
       setDoctors(allDoctors);
+      if (silent) setError(null);
     } catch (e: any) {
-      setError(e?.message || 'Failed to load doctors');
+      // A failed background refresh keeps the list that is already on screen.
+      if (!silent) setError(e?.message || 'Failed to load doctors');
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   };
 
@@ -47,6 +52,9 @@ export const AdminDoctorVerification: React.FC = () => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.accessToken]);
+
+  // New applications appear live (realtime alert), on returning to the tab, and every 30 s as a fallback.
+  useLiveRefresh(() => refresh({ silent: true }), ['admin-users', 'doctor-verification'], { enabled: Boolean(state.accessToken) });
 
   const handleVerify = async (doctorId: string) => {
     if (!state.accessToken) return;

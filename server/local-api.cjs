@@ -84,8 +84,11 @@ try {
   MsEdgeTtsModule = null
 }
 
-const DB_PATH = path.resolve(process.cwd(), '.local-db.json')
-const UPLOADS_DIR = path.resolve(process.cwd(), '.local-uploads')
+// SF_DATA_DIR moves the local data file and upload cache (default: the working directory). Test runs point it
+// at a temporary folder so they never read or modify a developer's real local data.
+const DATA_DIR = path.resolve(process.cwd(), String(process.env.SF_DATA_DIR || '').trim() || '.')
+const DB_PATH = path.resolve(DATA_DIR, '.local-db.json')
+const UPLOADS_DIR = path.resolve(DATA_DIR, '.local-uploads')
 const MAX_DOCTOR_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024
 const ALLOWED_UPLOAD_EXTENSIONS = new Set(['pdf', 'jpg', 'jpeg', 'png'])
 const ALLOWED_UPLOAD_MIME_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png'])
@@ -4264,7 +4267,18 @@ function createLocalApiMiddleware() {
 
         db.users[userId] = user
         db.usersByEmail[normalizedEmail] = userId
-        if (role === 'doctor') db.pendingDoctors.push(userId)
+        if (role === 'doctor') {
+          db.pendingDoctors.push(userId)
+          // Tell every admin right away (live alert + stored notification) so the application is not
+          // missed when the verification page is already open.
+          for (const admin of Object.values(db.users).filter((u) => u && isPrimaryAdmin(u))) {
+            pushUserAlert(db, admin.id, {
+              type: 'doctor_application',
+              message: `New doctor application: ${name}${specialty ? ` (${specialty})` : ''}. Review it in Doctor Verification.`,
+              message_bn: `নতুন ডাক্তার আবেদন: ${name}${specialty ? ` (${specialty})` : ''}। ডাক্তার ভেরিফিকেশনে পর্যালোচনা করুন।`,
+            })
+          }
+        }
         saveDb(db)
 
         if (role === 'doctor') {

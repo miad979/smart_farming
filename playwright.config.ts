@@ -1,4 +1,9 @@
 import { defineConfig } from '@playwright/test';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
+const uiDataDir = process.env.UI_DATA_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'sf-ui-data-'));
 
 const uiPort = Number(process.env.UI_PORT || 5176);
 const baseURL = process.env.UI_BASE_URL || `http://127.0.0.1:${uiPort}`;
@@ -29,6 +34,10 @@ export default defineConfig({
           ...process.env,
           NODE_ENV: 'test',
           PORT: String(uiPort),
+          // Isolated data for every run: never read or modify the developer's real local database
+          // (local data file, uploads, or the Postgres in .env.local).
+          SF_DATA_DIR: uiDataDir,
+          DATABASE_URL: '',
         },
       },
 });

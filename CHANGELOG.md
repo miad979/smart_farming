@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `npm run dev` hung forever when it had to start the local PostgreSQL (`ensure-local-postgres.cjs` captured pg_ctl output that the server keeps open on Windows); now starts in ~3 s
 
+- Admins did not see a new doctor application until they reloaded the page: admins now get a live "New doctor application" notification and the Doctor Verification page and admin dashboard update by themselves (also on returning to the tab and every 30 s as a fallback)
+- Role/admin smoke tests and the Playwright suite used the developer's real local database (they failed once the local admin password changed and left test data behind); they now run on isolated temporary data (`SF_DATA_DIR`)
+
 ### Deployment
 - Production refuses to start without `DATABASE_URL` (or an explicit `ALLOW_EPHEMERAL_STORAGE=true`) and without `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD`
 - Uploaded documents are stored in Postgres (`app_uploaded_files`) and restored after a redeploy wipes the disk

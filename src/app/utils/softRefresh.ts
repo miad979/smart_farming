@@ -4,6 +4,7 @@ export type SoftRefreshScope =
   | 'market-prices'
   | 'irrigation'
   | 'doctor-verification'
+  | 'admin-users'
   | 'disease-detection';
 
 export type SoftRefreshPayload = {
