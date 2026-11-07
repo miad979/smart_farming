@@ -2,7 +2,12 @@ import { defineConfig } from 'vite'
 import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
+import basicSsl from '@vitejs/plugin-basic-ssl'
 import { createRequire } from 'module'
+
+// `npm run dev:https` sets DEV_HTTPS=1: serve over HTTPS with a self-signed certificate so phones on the
+// same Wi-Fi get a secure context (required for the microphone / voice questions and GPS).
+const DEV_HTTPS = process.env.DEV_HTTPS === '1'
 
 const require = createRequire(import.meta.url)
 const WATCH_DIAGNOSTICS_ENABLED = String(process.env.VITE_WATCH_DIAGNOSTICS || 'true').toLowerCase() !== 'false'
@@ -43,6 +48,7 @@ export default defineConfig({
     // Tailwind is not being actively used – do not remove them
     react(),
     tailwindcss(),
+    ...(DEV_HTTPS ? [basicSsl({ name: 'smart-farming-dev' })] : []),
     {
       name: 'smart-farming-local-api',
       configureServer(server) {

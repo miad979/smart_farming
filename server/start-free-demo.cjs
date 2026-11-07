@@ -7,7 +7,6 @@ const args = process.argv.slice(2)
 const skipBuild = args.includes('--skip-build')
 const port = parsePort(readFlagValue('--port', process.env.DEMO_PORT || '4180'))
 
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const runtimeUrl = `http://localhost:${port}`
 
 let runtimeProc = null
@@ -27,7 +26,10 @@ function main() {
 
   if (!skipBuild) {
     log('Building frontend assets...')
-    runOrFail(npmCommand, ['run', 'build'])
+    // Run Vite's build directly with Node. Spawning `npm.cmd` without a shell fails with EINVAL on
+    // Windows since Node 18.20 / 20.12 (CVE-2024-27980), and using a shell is not needed here.
+    const viteBin = path.resolve(process.cwd(), 'node_modules', 'vite', 'bin', 'vite.js')
+    runOrFail(process.execPath, [viteBin, 'build'])
   } else {
     log('Skipping build (--skip-build).')
   }
@@ -40,6 +42,12 @@ function main() {
     PORT: String(port),
     AUTH_TOKEN_SECRET: authTokenSecret,
     CORS_ALLOWED_ORIGINS: process.env.CORS_ALLOWED_ORIGINS || runtimeUrl,
+  }
+
+  if (!String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim() || !String(process.env.BOOTSTRAP_ADMIN_PASSWORD || '')) {
+    log('Note: the demo runs in production mode on a public URL, so the default demo passwords (admin123 /')
+    log('super123) are disabled. To use an admin account, set BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD')
+    log('(e.g. BOOTSTRAP_ADMIN_EMAIL=admin@smartfarming.local replaces that account\'s default password).')
   }
 
   log(`Starting runtime at ${runtimeUrl}...`)

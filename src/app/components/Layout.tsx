@@ -24,6 +24,9 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     { path: '/detect', icon: Camera, label: t('detect', state.language) },
     { path: '/irrigation', icon: Droplet, label: t('irrigation', state.language) },
     { path: '/prices', icon: DollarSign, label: t('prices', state.language) },
+    ...(state.userMode !== 'guest' && state.user.role === 'farmer'
+      ? [{ path: '/consultations', icon: Stethoscope, label: state.language === 'bn' ? 'পরামর্শ' : 'Experts' }]
+      : []),
     { path: '/profile', icon: User, label: t('profile', state.language) },
   ];
 
@@ -181,7 +184,8 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
       </div>
 
       {/* Main Content */}
-      <main className="lg:pl-72 pt-16 lg:pt-0 pb-20 lg:pb-0">
+      {/* Mobile bottom padding clears the bottom nav plus the floating action buttons above it. */}
+      <main className="lg:pl-72 pt-16 lg:pt-0 pb-40 lg:pb-0">
         <div className="container mx-auto p-4 md:p-6 max-w-7xl">
           {children}
         </div>
@@ -201,19 +205,20 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
 
       {/* Mobile Bottom Navigation */}
       <nav className="lg:hidden fixed bottom-0 inset-x-0 z-10 bg-card/90 border-t border-border backdrop-blur-xl shadow-[0_-8px_30px_rgba(15,23,42,0.08)]">
-        <div className="flex justify-around px-2 py-2">
+        <div className="flex justify-around px-1 py-2">
           {navItems.map((item) => (
             <Link
               key={item.path}
               to={item.path}
-              className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all duration-200 ${
-                isActive(item.path) 
-                  ? 'text-primary scale-110' 
+              aria-current={isActive(item.path) ? 'page' : undefined}
+              className={`flex flex-1 min-w-0 flex-col items-center gap-1 px-0.5 py-2 rounded-xl transition-colors duration-200 ${
+                isActive(item.path)
+                  ? 'text-primary'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              <item.icon className="w-5 h-5" />
-              <span className="text-xs font-medium">{item.label}</span>
+              <item.icon className={`w-5 h-5 shrink-0 ${isActive(item.path) ? 'scale-110' : ''}`} />
+              <span className="w-full truncate text-center text-[11px] sm:text-xs font-medium">{item.label}</span>
               {isActive(item.path) && (
                 <div className="w-1 h-1 rounded-full bg-primary animate-pulse mt-0.5" />
               )}

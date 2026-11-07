@@ -3,15 +3,28 @@ services:
     name: smart-farming-runtime
     runtime: node
     plan: starter
-    autoDeploy: true
+    # Deploy only after the GitHub CI checks (UI smoke, security) pass on the pushed commit.
+    autoDeployTrigger: checksPass
     healthCheckPath: /api/health
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start:prod
+    # --ignore-scripts: a dependency (msedge-tts) ships a pnpm-only preinstall guard (`npx only-allow pnpm`)
+    # that can abort an npm install; no dependency needs its install script for this app (see docs/DEPLOYMENT.md).
+    buildCommand: npm ci --ignore-scripts && npm run build
+    # Run node directly (not through npm) so SIGTERM reaches the server for a graceful shutdown.
+    startCommand: node server/start-production.cjs
     envVars:
       - key: NODE_ENV
         value: production
       - key: AUTH_TOKEN_SECRET
         generateValue: true
+      # First admin account (required). Set both in the Render dashboard; the password needs 12+ characters
+      # with upper/lower case, a number and a symbol. The demo accounts (admin123 / super123) never work here.
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+      # One Render load balancer in front of the app: trust exactly one X-Forwarded-For hop for client IPs.
+      - key: TRUST_PROXY_HOPS
+        value: "1"
       - key: FORCE_SECURE_COOKIES
         value: "true"
       - key: AUTH_COOKIE_SAME_SITE
@@ -32,6 +45,7 @@ services:
         value: "20"
       - key: RATE_LIMIT_REALTIME_CONNECTIONS_PER_IP
         value: "5"
+      # Required: Render disks are wiped on every deploy. Use a Render Postgres (or Supabase/Neon) URL.
       - key: DATABASE_URL
         sync: false
       - key: SQL_SSL

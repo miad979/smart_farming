@@ -10,12 +10,15 @@ export const RealtimeTestPanel: React.FC = () => {
   const [loadingType, setLoadingType] = useState<string | null>(null);
   const [targetUserId, setTargetUserId] = useState('');
 
-  if (state.userMode === 'guest' || !state.accessToken) {
+  const isAdmin = state.user.role === 'admin';
+  const isOperator = isAdmin || state.user.role === 'super_admin';
+
+  // Developer/operator demo tool: hidden from farmers and doctors in production builds.
+  if (state.userMode === 'guest' || !state.accessToken || (!import.meta.env.DEV && !isOperator)) {
     return null;
   }
 
   const lang = state.language;
-  const isAdmin = state.user.role === 'admin';
 
   const trigger = async (type: 'price' | 'consultation' | 'irrigation' | 'disease' | 'system') => {
     setLoadingType(type);
@@ -37,7 +40,7 @@ export const RealtimeTestPanel: React.FC = () => {
   };
 
   return (
-    <div className="fixed bottom-36 lg:bottom-20 right-6 z-40">
+    <div className="fixed bottom-40 left-4 lg:left-auto lg:bottom-20 lg:right-6 z-40">
       {!open ? (
         <button
           onClick={() => setOpen(true)}

@@ -78,16 +78,29 @@ Live connection indicator:
 
 ## 📡 Real-Time Channels
 
+Transport: Server-Sent Events at `${VITE_API_BASE_URL}/realtime/stream` (default `/api/realtime/stream`).
+The client reuses the same base URL as every other API call and sends credentials, so a separately
+hosted API keeps realtime working. One failing subscriber no longer stops delivery to the others.
+
 ### User-Specific Channels:
-1. `consultations:{userId}` - Personal consultation updates
-2. `prices:{userId}` - Price alerts for user's watchlist
-3. `irrigation:{userId}` - User's irrigation device updates
-4. `diseases:{userId}` - Disease detection reviews
+1. `consultations:{userId}` - A farmer's own consultations (new / update events: accepted, chat messages, advice, completion)
+2. `alerts:{userId}` - Personal account alerts: doctor verification decisions, access changes, admin security warnings.
+   Verification and access alerts also refresh the user's profile, so an approved doctor's dashboard unlocks without re-login.
+3. `prices:{userId}` - Price alerts for user's watchlist
+4. `irrigation:{userId}` - User's irrigation device updates
+5. `devices:{userId}` - Virtual sensor / device updates
+6. `diseases:{userId}` - Disease detection reviews
+7. `assistant-chat:{chatId}` - Disease assistant chat replies
+
+### Role-Filtered Channel:
+1. `consultations:all` - Consultation events for doctors and admins. **Not a broadcast**: the server sends each
+   event only to users allowed to see that case (admins; the assigned doctor; or, while pending, the requested
+   doctor or all verified doctors for open requests). When another doctor claims a case, other doctors get a
+   `delete` event so it leaves their queue. Farmers never receive this channel.
 
 ### Broadcast Channels:
-1. `consultations:all` - All consultations (doctors only)
-2. `prices:broadcast` - Market price changes (everyone)
-3. `system:broadcast` - System-wide announcements
+1. `prices:broadcast` / `prices:batch` - Market price changes (everyone)
+2. `system:broadcast` - System-wide announcements
 
 ---
 
@@ -96,7 +109,8 @@ Live connection indicator:
 ### As a Farmer:
 
 1. **Sign Up / Login** to enable real-time features
-2. **Create a consultation** → Get instant notification when doctor responds
+2. **Request an expert from Disease Detection** → follow it on **My Consultations** (`/consultations`):
+   live status, chat with the doctor, the doctor's advice, and a rating once it is completed
 3. **Set price alerts** → Get notified when prices change
 4. **Connect IoT device** → Monitor irrigation status live
 5. **Submit disease detection** → Get notified when reviewed
@@ -104,17 +118,19 @@ Live connection indicator:
 ### As a Doctor:
 
 1. **Login with doctor account** (must be verified by admin)
-2. **Open doctor panel** → See consultations update in real-time
-3. **Respond to consultation** → Farmer gets instant notification
-4. **Review disease detections** → Farmer notified immediately
-5. **Monitor queue** → New cases appear without refresh
+2. **Open doctor panel** → requests addressed to you and open requests appear live in **Pending**
+3. **Accept & chat** (case moves to **In progress**) or **Respond & complete** directly → farmer is notified instantly
+4. **Mark Complete** requires written advice; the farmer's rating and feedback appear under **Completed**
+5. **Review disease detections** → Farmer notified immediately
 
 ### As an Admin:
 
 1. **Login with admin account**
-2. **Broadcast system announcements** → All users notified
-3. **Update market prices** → All users see changes instantly
-4. **Verify doctors** → Doctor gets immediate access
+2. **Consultation oversight** (Admin Dashboard) → live list of all cases; change priority, add an admin note,
+   or return an accepted case to the queue (releases the doctor)
+3. **Broadcast system announcements** → All users notified
+4. **Update market prices** → All users see changes instantly
+5. **Verify doctors** → the doctor gets a live alert and their dashboard unlocks immediately
 
 ---
 
@@ -126,7 +142,7 @@ Live connection indicator:
 // Use in any component for live consultations
 import { useConsultations } from '../hooks/useConsultations';
 
-const { consultations, createConsultation, updateConsultation } = useConsultations();
+const { consultations, createConsultation, updateConsultation, sendMessage, rate } = useConsultations();
 ```
 
 ```typescript

@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+export const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL || '/api';
 export const MAX_DOCTOR_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024;
 export const ALLOWED_DOCTOR_UPLOAD_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png'] as const;
 const ALLOWED_DOCTOR_UPLOAD_EXTENSIONS = ['pdf', 'jpg', 'jpeg', 'png'];
@@ -22,7 +22,8 @@ async function withCsrfRetry(request: () => Promise<Response>): Promise<Response
   let response = await request();
   if (response.status !== 403) return response;
 
-  const body = await readJsonSafely(response);
+  // Peek at a clone so the caller can still read the original body (error message).
+  const body = await readJsonSafely(response.clone());
   if (body?.error !== 'CSRF token is missing or invalid') {
     return response;
   }
@@ -62,6 +63,22 @@ async function readJsonSafely(response: Response): Promise<any> {
   } catch {
     return {};
   }
+}
+
+/**
+ * Standard request path for every API call: sends cookies (needed when the API is on
+ * another origin), attaches the current CSRF token, and on a CSRF rejection refreshes
+ * the token once and retries with the new value.
+ */
+async function apiRequest(url: string, init: RequestInit = {}): Promise<Response> {
+  const build = (): RequestInit => {
+    const method = (init.method || 'GET').toUpperCase();
+    const headers = new Headers(init.headers || {});
+    const csrf = getCookieValue(CSRF_COOKIE_NAME);
+    if (method !== 'GET' && csrf) headers.set('X-CSRF-Token', csrf);
+    return { ...init, headers };
+  };
+  return withCsrfRetry(() => apiFetch(url, build()));
 }
 
 function createApiError(message: string, status: number) {
@@ -246,6 +263,24 @@ export async function getAuditLogs(token: string) {
   return readJsonSafely(response) as Promise<{ logs: any[] }>;
 }
 
+export interface AdminActivityDay {
+  date: string; // YYYY-MM-DD in the viewer's local time
+  detections: number;
+  consultations: number;
+}
+
+export async function getAdminActivity(token: string) {
+  const tzOffset = new Date().getTimezoneOffset();
+  const response = await apiFetch(`${API_BASE_URL}/admin/activity?tzOffset=${tzOffset}`, {
+    headers: getAuthHeader(token),
+  });
+  if (!response.ok) {
+    const error = await readJsonSafely(response);
+    throw new Error(error.error || 'Failed to fetch activity');
+  }
+  return readJsonSafely(response) as Promise<{ days: AdminActivityDay[] }>;
+}
+
 export async function getAdminDeviceStatuses(token: string) {
   const response = await apiFetch(`${API_BASE_URL}/admin/device-status`, {
     headers: getAuthHeader(token),
@@ -365,14 +400,14 @@ export async function checkUploadedDoctorDocumentDuplicate(file: File): Promise<
 }> {
   const sha256 = await computeFileSha256(file);
 
-  const response = await fetch(`${API_BASE_URL}/uploads/documents/check-hash`, {
+  const response = await apiRequest(`${API_BASE_URL}/uploads/documents/check-hash`, {
     method: 'POST',
     headers: getAuthHeader(),
     body: JSON.stringify({ sha256 }),
   });
 
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to check duplicate file');
   }
 
@@ -392,13 +427,13 @@ export async function deleteUploadedDoctorDocument(fileUrl: string) {
   }
 
   const fileId = fileUrl.slice(idx + marker.length);
-  const response = await fetch(`${API_BASE_URL}/uploads/documents/${encodeURIComponent(fileId)}`, {
+  const response = await apiRequest(`${API_BASE_URL}/uploads/documents/${encodeURIComponent(fileId)}`, {
     method: 'DELETE',
     headers: getAuthHeader(),
   });
 
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to remove uploaded document');
   }
 
@@ -457,7 +492,7 @@ export async function getPendingDoctors(token: string) {
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to fetch pending doctors');
   }
   
@@ -472,7 +507,7 @@ export async function verifyDoctor(token: string, doctorId: string, status: 'ver
   }));
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to verify doctor');
   }
   
@@ -480,12 +515,12 @@ export async function verifyDoctor(token: string, doctorId: string, status: 'ver
 }
 
 export async function getAvailableExperts() {
-  const response = await fetch(`${API_BASE_URL}/experts`, {
+  const response = await apiRequest(`${API_BASE_URL}/experts`, {
     headers: getAuthHeader(),
   });
 
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to fetch experts');
   }
 
@@ -495,14 +530,14 @@ export async function getAvailableExperts() {
 // ==================== DISEASE DETECTION ====================
 
 export async function saveDiseaseRecord(data: any, token?: string) {
-  const response = await fetch(`${API_BASE_URL}/diseases`, {
+  const response = await apiRequest(`${API_BASE_URL}/diseases`, {
     method: 'POST',
     headers: getAuthHeader(token),
     body: JSON.stringify(data),
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to save disease record');
   }
   
@@ -510,14 +545,14 @@ export async function saveDiseaseRecord(data: any, token?: string) {
 }
 
 export async function detectCropDisease(data: CropDiseaseDetectionRequest, token?: string) {
-  const response = await fetch(`${API_BASE_URL}/diseases/detect`, {
+  const response = await apiRequest(`${API_BASE_URL}/diseases/detect`, {
     method: 'POST',
     headers: getAuthHeader(token),
     body: JSON.stringify(data),
   });
 
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to detect crop disease');
   }
 
@@ -530,12 +565,12 @@ export async function detectCropDisease(data: CropDiseaseDetectionRequest, token
 }
 
 export async function getDiseaseHistory(token: string) {
-  const response = await fetch(`${API_BASE_URL}/diseases`, {
+  const response = await apiRequest(`${API_BASE_URL}/diseases`, {
     headers: getAuthHeader(token),
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to fetch disease history');
   }
   
@@ -550,14 +585,14 @@ export async function updateDiseaseRecord(
     treatmentNote?: string;
   },
 ) {
-  const response = await fetch(`${API_BASE_URL}/diseases/${diseaseId}`, {
+  const response = await apiRequest(`${API_BASE_URL}/diseases/${diseaseId}`, {
     method: 'PUT',
     headers: getAuthHeader(token),
     body: JSON.stringify(updates),
   });
 
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to update disease record');
   }
 
@@ -568,12 +603,12 @@ export async function updateDiseaseRecord(
 
 export async function getAssistantChatHistory(chatId: string) {
   const params = new URLSearchParams({ chatId });
-  const response = await fetch(`${API_BASE_URL}/assistant-chat/history?${params.toString()}`, {
+  const response = await apiRequest(`${API_BASE_URL}/assistant-chat/history?${params.toString()}`, {
     headers: getAuthHeader(),
   });
 
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to fetch assistant chat history');
   }
 
@@ -594,14 +629,14 @@ export async function sendAssistantChatMessage(data: {
   prevention_en?: string;
   prevention_bn?: string;
 }) {
-  const response = await fetch(`${API_BASE_URL}/assistant-chat`, {
+  const response = await apiRequest(`${API_BASE_URL}/assistant-chat`, {
     method: 'POST',
     headers: getAuthHeader(),
     body: JSON.stringify(data),
   });
 
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to send assistant chat message');
   }
 
@@ -617,12 +652,12 @@ export async function sendAssistantChatMessage(data: {
 // ==================== IRRIGATION ====================
 
 export async function getIrrigationSchedule(token: string, userId: string) {
-  const response = await fetch(`${API_BASE_URL}/irrigation/${userId}`, {
+  const response = await apiRequest(`${API_BASE_URL}/irrigation/${userId}`, {
     headers: getAuthHeader(token),
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to fetch irrigation schedule');
   }
   
@@ -635,12 +670,12 @@ export async function getCurrentWeatherData(lat: number, lng: number) {
     lng: String(lng),
   });
 
-  const response = await fetch(`${API_BASE_URL}/weather/current?${params.toString()}`, {
+  const response = await apiRequest(`${API_BASE_URL}/weather/current?${params.toString()}`, {
     headers: getAuthHeader(),
   });
 
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to fetch weather');
   }
 
@@ -665,12 +700,12 @@ export async function getYieldAdvice(params: {
     query.set('crop', params.crop);
   }
 
-  const response = await fetch(`${API_BASE_URL}/yield/advice?${query.toString()}`, {
+  const response = await apiRequest(`${API_BASE_URL}/yield/advice?${query.toString()}`, {
     headers: getAuthHeader(),
   });
 
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to fetch yield advice');
   }
 
@@ -678,14 +713,14 @@ export async function getYieldAdvice(params: {
 }
 
 export async function updateIrrigationSchedule(token: string, userId: string, updates: any) {
-  const response = await fetch(`${API_BASE_URL}/irrigation/${userId}`, {
+  const response = await apiRequest(`${API_BASE_URL}/irrigation/${userId}`, {
     method: 'PUT',
     headers: getAuthHeader(token),
     body: JSON.stringify(updates),
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to update irrigation schedule');
   }
   
@@ -695,14 +730,14 @@ export async function updateIrrigationSchedule(token: string, userId: string, up
 // ==================== CONSULTATIONS ====================
 
 export async function createConsultation(token: string, data: any) {
-  const response = await fetch(`${API_BASE_URL}/consultations`, {
+  const response = await apiRequest(`${API_BASE_URL}/consultations`, {
     method: 'POST',
     headers: getAuthHeader(token),
     body: JSON.stringify(data),
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to create consultation');
   }
   
@@ -710,12 +745,12 @@ export async function createConsultation(token: string, data: any) {
 }
 
 export async function getConsultations(token: string) {
-  const response = await fetch(`${API_BASE_URL}/consultations`, {
+  const response = await apiRequest(`${API_BASE_URL}/consultations`, {
     headers: getAuthHeader(token),
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to fetch consultations');
   }
   
@@ -723,18 +758,98 @@ export async function getConsultations(token: string) {
 }
 
 export async function updateConsultation(token: string, consultationId: string, updates: any) {
-  const response = await fetch(`${API_BASE_URL}/consultations/${consultationId}`, {
+  const response = await apiRequest(`${API_BASE_URL}/consultations/${consultationId}`, {
     method: 'PUT',
     headers: getAuthHeader(token),
     body: JSON.stringify(updates),
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to update consultation');
   }
-  
+
   return response.json();
+}
+
+export async function changePassword(token: string, currentPassword: string, newPassword: string) {
+  const response = await apiRequest(`${API_BASE_URL}/auth/change-password`, {
+    method: 'POST',
+    headers: getAuthHeader(token),
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+  if (!response.ok) {
+    const error = await readJsonSafely(response);
+    throw new Error(error.error || 'Failed to change password');
+  }
+  return response.json();
+}
+
+export interface ConsultationMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderRole: 'farmer' | 'doctor' | string;
+  text: string;
+  createdAt: string;
+}
+
+export interface Consultation {
+  id: string;
+  farmerId: string;
+  farmerName: string;
+  farmerPhone?: string;
+  crop?: string;
+  crop_bn?: string;
+  disease?: string;
+  disease_bn?: string;
+  description?: string;
+  description_en?: string;
+  location?: string;
+  location_bn?: string;
+  priority?: 'low' | 'medium' | 'high';
+  mode?: 'chat' | 'call';
+  status: 'pending' | 'in-progress' | 'completed';
+  requestedDoctorId?: string | null;
+  requestedDoctorName?: string | null;
+  doctorId?: string | null;
+  doctorName?: string | null;
+  doctorSpecialty?: string;
+  doctorResponse?: string;
+  doctorResponse_en?: string;
+  responseTime?: string;
+  responseTime_bn?: string;
+  respondedAt?: string;
+  completedAt?: string;
+  rating?: number;
+  adminNote?: string;
+  feedback?: string;
+  feedback_en?: string;
+  images?: string[];
+  messages?: ConsultationMessage[];
+  submittedAt: string;
+  updatedAt?: string;
+}
+
+async function postConsultationAction(token: string, path: string, body: unknown, fallbackError: string) {
+  const response = await apiRequest(`${API_BASE_URL}/consultations/${path}`, {
+    method: 'POST',
+    headers: getAuthHeader(token),
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error || fallbackError);
+  }
+  return response.json() as Promise<{ consultation: Consultation }>;
+}
+
+export function sendConsultationMessage(token: string, consultationId: string, text: string) {
+  return postConsultationAction(token, `${encodeURIComponent(consultationId)}/messages`, { text }, 'Failed to send message');
+}
+
+export function rateConsultation(token: string, consultationId: string, rating: number, feedback: string) {
+  return postConsultationAction(token, `${encodeURIComponent(consultationId)}/rating`, { rating, feedback }, 'Failed to submit rating');
 }
 
 // ==================== MARKET PRICES ====================
@@ -745,12 +860,12 @@ export async function getMarketPrices(location?: string, crop?: string) {
   if (crop) params.append('crop', crop);
   
   const url = `${API_BASE_URL}/prices${params.toString() ? '?' + params.toString() : ''}`;
-  const response = await fetch(url, {
+  const response = await apiRequest(url, {
     headers: getAuthHeader(),
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to fetch prices');
   }
   
@@ -763,12 +878,12 @@ export async function getLiveMarketPrices(location?: string, crop?: string) {
   if (crop) params.append('crop', crop);
 
   const url = `${API_BASE_URL}/prices/live${params.toString() ? '?' + params.toString() : ''}`;
-  const response = await fetch(url, {
+  const response = await apiRequest(url, {
     headers: getAuthHeader(),
   });
 
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to fetch live prices');
   }
 
@@ -780,14 +895,14 @@ export async function getLiveDhakaMarketPrices() {
 }
 
 export async function updateMarketPrice(token: string, data: any) {
-  const response = await fetch(`${API_BASE_URL}/prices`, {
+  const response = await apiRequest(`${API_BASE_URL}/prices`, {
     method: 'POST',
     headers: getAuthHeader(token),
     body: JSON.stringify(data),
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to update price');
   }
   
@@ -797,14 +912,14 @@ export async function updateMarketPrice(token: string, data: any) {
 // ==================== PRICE ALERTS ====================
 
 export async function createPriceAlert(token: string, data: any) {
-  const response = await fetch(`${API_BASE_URL}/alerts`, {
+  const response = await apiRequest(`${API_BASE_URL}/alerts`, {
     method: 'POST',
     headers: getAuthHeader(token),
     body: JSON.stringify(data),
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to create alert');
   }
   
@@ -812,12 +927,12 @@ export async function createPriceAlert(token: string, data: any) {
 }
 
 export async function getPriceAlerts(token: string) {
-  const response = await fetch(`${API_BASE_URL}/alerts`, {
+  const response = await apiRequest(`${API_BASE_URL}/alerts`, {
     headers: getAuthHeader(token),
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to fetch alerts');
   }
   
@@ -825,13 +940,13 @@ export async function getPriceAlerts(token: string) {
 }
 
 export async function deletePriceAlert(token: string, alertId: string) {
-  const response = await fetch(`${API_BASE_URL}/alerts/${alertId}`, {
+  const response = await apiRequest(`${API_BASE_URL}/alerts/${alertId}`, {
     method: 'DELETE',
     headers: getAuthHeader(token),
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to delete alert');
   }
   
@@ -841,14 +956,14 @@ export async function deletePriceAlert(token: string, alertId: string) {
 // ==================== DEVICES ====================
 
 export async function registerDevice(token: string, data: any) {
-  const response = await fetch(`${API_BASE_URL}/devices`, {
+  const response = await apiRequest(`${API_BASE_URL}/devices`, {
     method: 'POST',
     headers: getAuthHeader(token),
     body: JSON.stringify(data),
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to register device');
   }
   
@@ -856,12 +971,12 @@ export async function registerDevice(token: string, data: any) {
 }
 
 export async function getDevices(token: string) {
-  const response = await fetch(`${API_BASE_URL}/devices`, {
+  const response = await apiRequest(`${API_BASE_URL}/devices`, {
     headers: getAuthHeader(token),
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to fetch devices');
   }
   
@@ -869,14 +984,14 @@ export async function getDevices(token: string) {
 }
 
 export async function setupVirtualIrrigationDevice(token: string, data?: { crop?: string }) {
-  const response = await fetch(`${API_BASE_URL}/devices/virtual-irrigation/setup`, {
+  const response = await apiRequest(`${API_BASE_URL}/devices/virtual-irrigation/setup`, {
     method: 'POST',
     headers: getAuthHeader(token),
     body: JSON.stringify(data || {}),
   });
 
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to setup virtual irrigation device');
   }
 
@@ -895,14 +1010,14 @@ export async function simulateVirtualIrrigationTick(
     tickMode?: 'decision' | 'sensor-only';
   },
 ) {
-  const response = await fetch(`${API_BASE_URL}/devices/${encodeURIComponent(deviceId)}/simulate`, {
+  const response = await apiRequest(`${API_BASE_URL}/devices/${encodeURIComponent(deviceId)}/simulate`, {
     method: 'POST',
     headers: getAuthHeader(token),
     body: JSON.stringify(data || {}),
   });
 
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to simulate virtual irrigation tick');
   }
 
@@ -911,7 +1026,7 @@ export async function simulateVirtualIrrigationTick(
 
 // Health check
 export async function healthCheck() {
-  const response = await fetch(`${API_BASE_URL}/health`);
+  const response = await apiRequest(`${API_BASE_URL}/health`);
   return response.json();
 }
 
@@ -922,14 +1037,14 @@ export async function sendRealtimeTestEvent(
     targetUserId?: string;
   },
 ) {
-  const response = await fetch(`${API_BASE_URL}/realtime/test-event`, {
+  const response = await apiRequest(`${API_BASE_URL}/realtime/test-event`, {
     method: 'POST',
     headers: getAuthHeader(token),
     body: JSON.stringify(data),
   });
 
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readJsonSafely(response);
     throw new Error(error.error || 'Failed to send realtime test event');
   }
 

@@ -22,7 +22,9 @@ export const RealtimeStatus: React.FC = () => {
   }
 
   return (
-    <div className="fixed bottom-24 lg:bottom-6 right-6 z-30">
+    // Desktop only: on phones the notification bell already shows connection state and this pill
+    // would sit on top of the Detect button and page content.
+    <div className="hidden lg:block fixed lg:bottom-6 right-6 z-30">
       <div className={`
         flex items-center gap-2 px-4 py-2 rounded-full
         backdrop-blur-md shadow-lg border

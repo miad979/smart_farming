@@ -32,7 +32,13 @@ function main() {
     process.exit(preflightExitCode)
   }
 
-  const vite = startVite(process.argv.slice(2))
+  // `--https`: serve over HTTPS (self-signed) on the local network. Handled here because Vite has no such flag.
+  const args = process.argv.slice(2)
+  if (args.includes('--https')) {
+    process.env.DEV_HTTPS = '1'
+    if (!args.includes('--host')) args.push('--host')
+  }
+  const vite = startVite(args.filter((a) => a !== '--https'))
   let interrupted = false
 
   const handleSignal = (signal) => {

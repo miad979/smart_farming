@@ -86,6 +86,43 @@ for (const name of rateLimitVars) {
   validatePositiveIntegerEnv(name)
 }
 
+// --- Persistent storage -------------------------------------------------------------------------------
+// The app keeps its state in a JSON snapshot. On hosts with ephemeral disks (Render, Railway, Fly, Docker
+// without a volume) that file is wiped on every deploy/restart, so production needs a Postgres database.
+const databaseUrl = String(process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.SUPABASE_DB_URL || process.env.SUPABASE_DATABASE_URL || '').trim()
+const allowEphemeral = String(process.env.ALLOW_EPHEMERAL_STORAGE || '').trim().toLowerCase() === 'true'
+if (!databaseUrl && !allowEphemeral) {
+  console.error('[env] DATABASE_URL is required in production: without it all users, consultations and uploads are')
+  console.error('      lost on every deploy or restart. Set DATABASE_URL to a Postgres connection string, or set')
+  console.error('      ALLOW_EPHEMERAL_STORAGE=true only for throwaway demos (or a host with a persistent disk).')
+  process.exit(1)
+}
+if (!databaseUrl && allowEphemeral) {
+  console.warn('[env] ALLOW_EPHEMERAL_STORAGE=true: data is stored only on local disk.')
+}
+
+// --- First administrator ------------------------------------------------------------------------------
+// The demo accounts (admin123 / super123) are never created in production and cannot sign in there.
+const bootstrapEmail = String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim()
+const bootstrapPassword = String(process.env.BOOTSTRAP_ADMIN_PASSWORD || '')
+if (!bootstrapEmail || !bootstrapPassword) {
+  console.error('[env] BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD are required in production (they create the')
+  console.error('      first admin account; an existing account with that email keeps its password).')
+  process.exit(1)
+}
+if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(bootstrapEmail)) {
+  console.error('[env] BOOTSTRAP_ADMIN_EMAIL is not a valid email address.')
+  process.exit(1)
+}
+const strongPassword = bootstrapPassword.length >= 12
+  && /[a-z]/.test(bootstrapPassword) && /[A-Z]/.test(bootstrapPassword)
+  && /[0-9]/.test(bootstrapPassword) && /[^A-Za-z0-9]/.test(bootstrapPassword)
+if (!strongPassword || ['admin123', 'super123'].includes(bootstrapPassword)) {
+  console.error('[env] BOOTSTRAP_ADMIN_PASSWORD must be at least 12 characters with upper and lower case letters,')
+  console.error('      a number and a symbol.')
+  process.exit(1)
+}
+
 const hasAiProvider = Boolean(
   String(process.env.OPENAI_API_KEY || '').trim()
     || String(process.env.GROQ_API_KEY || '').trim()

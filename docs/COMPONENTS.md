@@ -298,40 +298,19 @@ Logged In (role: farmer by default)
 
 ---
 
-### Consultations.tsx
+### MyConsultations.tsx (implemented as `pages/MyConsultations.tsx`)
 
-**Route:** `/consultations`
+**Route:** `/consultations` (menu item **Experts**)
 
-**Role Access:** Logged-in farmers only
+**Role Access:** Logged-in farmers only (`RequireAuth` + `RequireRole farmer`)
 
 **Key Features:**
-- Available experts list
-- Doctor profiles:
-  - Name (Bengali + English)
-  - Specialization
-  - Rating (stars)
-  - Availability
-- Contact options:
-  - Call
-  - Video call
-  - Message
-- Consultation history
-- Filter by specialization
+- All of the farmer's consultation requests, newest first, with live status
+- Doctor's advice, chat thread (`ConsultationThread`), 1–5 star rating after completion
+- `?id=<consultationId>` opens a specific case (used by the Disease Detection success card)
 
-**Data Source:**
-```javascript
-mockExperts = [
-  {
-    id: "doc1",
-    name: "Dr. Rahman",
-    name_bn: "ডাঃ রহমান",
-    specialization: "Crop Disease",
-    specialization_bn: "ফসলের রোগ",
-    rating: 4.8,
-    available: true
-  }
-]
-```
+**Data Source:** `useConsultations()` hook → `GET /api/consultations` + `consultations:{userId}` realtime channel.
+Requests are created from Disease Detection → *Ask an Expert* (`expertId`, `mode: chat | call`).
 
 ---
 
@@ -370,22 +349,27 @@ mockExperts = [
 
 **Route:** `/doctor`
 
-**Role Access:** Verified doctors only
+**Role Access:** Verified doctors only (pending / rejected / suspended doctors see `DoctorVerificationPending`)
 
 **Features:**
-- Active consultations count
-- Pending reviews count
-- Completed consultations
-- Quick stats
-- Recent activity
-- Navigation to queue/reviews
+- Live stats from real cases: total, pending, responded today, average response time, average rating, 7-day chart
+- Tabs: **Pending** (respond & complete, accept & chat, call user), **In progress** (chat, send advice,
+  mark complete), **Completed** (advice, rating, feedback)
+- Data: `useConsultations()` → `consultations:all` channel, filtered per case by the server
 
-**Verification Check:**
-```typescript
-if (!state.doctorVerified) {
-  return <Navigate to="/doctor/pending" />;
-}
-```
+**Verification Check:** the verification gate runs after all hooks so hook order stays stable when the
+status changes live (via the `alerts:{userId}` verification alert).
+
+---
+
+### Consultation & account components
+
+| Component | Purpose |
+|---|---|
+| `components/ConsultationThread.tsx` | Shared chat thread + composer used by farmer and doctor views |
+| `components/AdminConsultationsPanel.tsx` | Admin/super-user oversight: filter, priority, admin note, return to queue |
+| `components/ChangePasswordForm.tsx` | Profile → Security change-password form (`POST /api/auth/change-password`) |
+| `components/VoiceRecorder.tsx` | Speech-to-text question input for the disease assistant chat (Web Speech API) |
 
 ---
 
@@ -972,4 +956,4 @@ export const DiseaseDetection: React.FC = () => {
 ---
 
 **Document Version:** 1.0  
-**Last Updated:** February 2026
+**Last Updated:** November 2026

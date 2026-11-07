@@ -13,8 +13,9 @@ import { AdminDoctorVerification } from './pages/AdminDoctorVerification';
 import { SignupPage } from './pages/SignupPage';
 import { DoctorApplicationPage } from './pages/DoctorApplicationPage';
 import { NotFound } from './pages/NotFound';
+import { MyConsultations } from './pages/MyConsultations';
 
-const RequireAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+const RequireAuth: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
   const { state } = useApp();
   if (state.userMode === 'guest' || !state.accessToken) {
     return React.createElement(Navigate, { to: '/profile?auth=signin', replace: true });
@@ -22,7 +23,7 @@ const RequireAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return React.createElement(React.Fragment, null, children);
 };
 
-const RequireRole: React.FC<{ role: UserRole; children: React.ReactNode }> = ({ role, children }) => {
+const RequireRole: React.FC<{ role: UserRole; children?: React.ReactNode }> = ({ role, children }) => {
   const { state } = useApp();
   const hasRequiredRole = state.user.role === role;
   if (!hasRequiredRole) {
@@ -31,7 +32,7 @@ const RequireRole: React.FC<{ role: UserRole; children: React.ReactNode }> = ({ 
   return React.createElement(React.Fragment, null, children);
 };
 
-const RequireAdminOrSuperUser: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+const RequireAdminOrSuperUser: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
   const { state } = useApp();
   const allowed = state.user.role === 'admin' || state.user.role === 'super_admin';
   if (!allowed) {
@@ -39,6 +40,16 @@ const RequireAdminOrSuperUser: React.FC<{ children: React.ReactNode }> = ({ chil
   }
   return React.createElement(React.Fragment, null, children);
 };
+
+const MyConsultationsRoute: React.FC = () => React.createElement(
+  RequireAuth,
+  null,
+  React.createElement(
+    RequireRole,
+    { role: 'farmer' },
+    React.createElement(MyConsultations),
+  ),
+);
 
 const AdminDashboardRoute: React.FC = () => React.createElement(
   RequireAuth,
@@ -102,6 +113,10 @@ export const router = createBrowserRouter([
       {
         path: 'profile',
         Component: Profile,
+      },
+      {
+        path: 'consultations',
+        Component: MyConsultationsRoute,
       },
       {
         path: 'admin',

@@ -1,9 +1,9 @@
 name: Deploy Runtime (Render)
 
+# Manual redeploy only. Normal deploys are done by Render itself after CI passes
+# (render.yaml: autoDeployTrigger: checksPass); triggering on push here would deploy a second,
+# untested time.
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:

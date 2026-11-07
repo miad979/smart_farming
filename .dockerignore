@@ -1,0 +1,17 @@
+node_modules
+dist
+coverage
+playwright-report
+test-results
+.git
+.github
+.local-db.json
+.local-db.json.*
+.local-uploads
+.postgres-local
+local-db-export
+.env
+.env.*
+!.env.example
+!.env.production.example
+*.log

@@ -21,6 +21,23 @@ npm run dev
 
 Open `http://localhost:5173`.
 
+### Test on a phone (same Wi-Fi, HTTPS)
+
+```bash
+npm run dev:https
+```
+
+Vite prints `Network:` addresses such as `https://192.168.0.103:5173` — open the Wi-Fi one on the phone.
+
+- The certificate is self-signed, so the phone shows a warning once: tap **Advanced → Proceed** (Chrome)
+  or **Show Details → visit this website** (Safari). The connection is still encrypted.
+- HTTPS gives the page a secure context, which phones require for the **microphone (voice questions)** and **GPS (local weather)**.
+- Allow Node.js through the Windows firewall (Private networks) if the phone cannot connect.
+- Anyone on the same network can reach the app while this runs; change the default admin password first.
+- `npm run dev:lan` is the same over plain `http://` (voice and GPS will not work on the phone).
+- For a trusted certificate with no warning, use the public tunnel below (`npm run demo:free`).
+- The app is laid out for phones down to 320px wide (bottom navigation, floating Detect/Help buttons).
+
 ## Free Public Demo (No Billing)
 
 You can run the full app (frontend + API + realtime) locally and expose it with a free Cloudflare quick tunnel.
@@ -38,23 +55,18 @@ Notes:
 
 This app needs a long-running Node runtime because it serves both the frontend and backend API (`/api/*`) from `server/preview-server.cjs`.
 
-1. Create runtime secrets:
+Deploy with the Render Blueprint (`render.yaml`) or the `Dockerfile` on any container host.
+The server refuses to start in production unless these are set:
 
-```bash
-npm run secret:auth
-```
+| Variable | Purpose |
+|---|---|
+| `AUTH_TOKEN_SECRET` | Token signing secret (`npm run secret:auth`; Render generates one) |
+| `CORS_ALLOWED_ORIGINS` | Your public URL |
+| `DATABASE_URL` | Postgres — hosting disks are wiped on every deploy; data and uploads live here |
+| `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD` | First admin account (strong password) |
 
-2. Use the production env template:
-
-```bash
-cp .env.production.example .env.production
-```
-
-3. Deploy as a Render Blueprint using `render.yaml`.
-4. Set required secrets in Render (`AUTH_TOKEN_SECRET`, `CORS_ALLOWED_ORIGINS`, `MARKET_VOLATILITY_PROFILE=balanced`, and any AI provider keys you use).
-5. Optional: set GitHub Actions repository variable `RENDER_DEPLOY_HOOK_URL` to auto-deploy from `main` via `.github/workflows/deploy-render.yml`.
-
-Detailed steps are in `docs/RUNTIME_DEPLOYMENT_RENDER.md`.
+Render deploys automatically **only after CI passes** (`autoDeployTrigger: checksPass`).
+Full guide, Docker instructions and go-live checklist: `docs/RUNTIME_DEPLOYMENT_RENDER.md`.
 
 ## PostgreSQL Mode (Optional)
 
@@ -99,6 +111,11 @@ npm run dev
 
 When PostgreSQL has a snapshot, runtime loads from PostgreSQL first. If PostgreSQL is configured but empty, the backend backfills from `.local-db.json`.
 When using local PostgreSQL on `127.0.0.1:5434`, `npm run dev` automatically tries to start the local PostgreSQL instance from `.postgres-local/data` before launching Vite.
+
+Local PostgreSQL layout (all gitignored): cluster in `.postgres-local/data` (127.0.0.1:5434 only, password auth),
+database and owner role `smart_farming`, connection string in `.env.local` (`DATABASE_URL`, `SQL_SSL=false`),
+superuser password in `.postgres-local/superuser-password.txt`. Stop it with
+`"C:/Program Files/PostgreSQL/16/bin/pg_ctl.exe" -D .postgres-local/data stop`.
 
 ## Optional Plant.id Setup
 
@@ -154,10 +171,13 @@ EDGE_TTS_EN_RATE=default
 
 ## Admin Access
 
-Default local admin account:
+Default **local development** admin account:
 
 - Email: `admin@smartfarming.local`
 - Password: `admin123`
+
+These demo accounts are never created in production, and their passwords are refused there
+(the first production admin comes from `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD`).
 
 ## Notes
 

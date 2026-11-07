@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext';
 import { realtimeConnection, useRealtime } from '../context/RealtimeContext';
 import { t } from '../utils/translations';
 import { VoicePlayer } from '../components/VoicePlayer';
+import { VoiceRecorder } from '../components/VoiceRecorder';
 import { createConsultation, detectCropDisease, getAssistantChatHistory, getAvailableExperts, getDiseaseHistory, saveDiseaseRecord, sendAssistantChatMessage, updateDiseaseRecord, type AssistantChatMessage, type AvailableExpert, type CropDiseaseDetectionResult } from '../utils/api';
 import { useNavigate } from 'react-router';
 import { jsPDF } from 'jspdf';
@@ -805,6 +806,8 @@ export const DiseaseDetection: React.FC = () => {
           ? `Need chat consultation with ${expert.name} for ${result.disease}.`
           : `Need call consultation with ${expert.name} for ${result.disease}.`,
         priority: 'medium',
+        expertId: expert.id,
+        mode,
         images: previewImage ? [previewImage] : [],
       });
 
@@ -833,10 +836,6 @@ export const DiseaseDetection: React.FC = () => {
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
       ]);
-
-      if (mode === 'call') {
-        window.location.href = 'tel:+8801700000000';
-      }
     } catch (error: any) {
       setDetectionError(error?.message || (lang === 'bn' ? 'পরামর্শ অনুরোধ পাঠানো যায়নি' : 'Could not send consultation request'));
     } finally {
@@ -1273,12 +1272,10 @@ export const DiseaseDetection: React.FC = () => {
           </p>
           <button
             type="button"
-            onClick={() => navigate(state.user.role === 'doctor' ? '/doctor' : '/profile')}
+            onClick={() => navigate(`/consultations?id=${encodeURIComponent(lastConsultation.id)}`)}
             className="mt-3 px-3 py-1.5 text-xs font-medium bg-emerald-600 text-white rounded-md hover:bg-emerald-700 transition-colors"
           >
-            {state.user.role === 'doctor'
-              ? (lang === 'bn' ? 'ডক্টর ড্যাশবোর্ডে দেখুন' : 'View in Doctor Dashboard')
-              : (lang === 'bn' ? 'প্রোফাইলে দেখুন' : 'View in Profile')}
+            {lang === 'bn' ? 'পরামর্শ ও চ্যাট খুলুন' : 'Open consultation & chat'}
           </button>
         </div>
       )}
@@ -1500,6 +1497,7 @@ export const DiseaseDetection: React.FC = () => {
                 {lang === 'bn' ? 'পাঠান' : 'Send'}
               </button>
             </div>
+            <VoiceRecorder lang={lang} disabled={!chatSessionId} onSend={(text) => sendChatText(text)} />
           </div>
         )}
       </div>

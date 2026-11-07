@@ -123,12 +123,14 @@ The dashboard is your home screen with quick access to everything.
 7. **Ask Questions**
    - Use Chat Assistant for quick questions
    - Quick reply buttons for common queries
+   - **Ask by voice:** tap the green microphone button, speak in বাংলা or English (follows the app
+     language), check the recognised text, then tap Send. Works in Chrome and Edge; other browsers
+     show a notice instead.
    - AI provides instant answers
 
 8. **Request Expert Consultation** (Login Required)
-   - Click "Need Expert Opinion?"
-   - Choose from available doctors
-   - Doctor will review and provide diagnosis
+   - Open "Ask an Expert" and pick a verified doctor
+   - Choose Chat or Call (callback) — see *Consultations* below
 
 ---
 
@@ -233,43 +235,32 @@ Get notified when prices reach your target.
 
 ### Consultations (Login Required)
 
-#### Find Agricultural Experts
-
-1. Go to **Consultations** page
-2. Browse available doctors
-3. View their profiles:
-   - Specialization (Crop Disease, Pests, etc.)
-   - Rating (⭐⭐⭐⭐⭐)
-   - Availability status
-
 #### Request a Consultation
 
-**Method 1: From Disease Detection**
-- After scanning a disease
-- Click "Consult Expert"
-- Choose doctor or let system assign
+1. Run a scan on **Detect** (photo of the affected crop)
+2. Open **Ask an Expert** under the result. Only admin-verified experts are listed.
+3. Choose how to talk:
+   - 💬 **Chat** — the expert replies in writing on the consultation page
+   - 📞 **Call** — a callback request; the expert calls your registered phone number
+4. The request goes to the expert you picked, with your crop photo attached
+5. Tap **Open consultation & chat** to follow it
 
-**Method 2: General Consultation**
-- Go to Consultations page
-- Click on a doctor
-- Choose contact method:
-  - 📞 Call
-  - 📹 Video Call
-  - 💬 Message
+#### My Consultations page (`/consultations`, menu item **Experts**)
 
-#### During Consultation
+Every request you made, newest first, with a live status:
 
-- Explain your problem clearly
-- Share photos if needed
-- Follow doctor's advice
-- Take notes or screenshots
+| Status | Meaning |
+|---|---|
+| Waiting for expert | Not picked up yet. You can already add more details in the chat. |
+| In progress | An expert accepted it. Chat with them here; replies arrive instantly. |
+| Completed | The expert sent their advice (shown in green). The chat is closed. |
+
+You get a notification when your request is accepted, when the expert messages you, and when the advice arrives.
 
 #### After Consultation
 
-- Consultation marked as "Completed"
-- View in consultation history
-- Rate and review the doctor
-- Save recommendations
+- Read the expert's advice on the consultation card
+- Rate the expert (1–5 stars) and leave optional feedback; the expert sees it in their completed list
 
 ---
 
@@ -347,6 +338,12 @@ Your farming diary:
 - GPS auto-detection
 - Or enter manually
 
+#### Security
+
+- **Change password:** Profile → Security → *Change password*. Enter your current password and the new one
+  twice. The new password needs at least 10 characters with upper and lower case letters, a number and a symbol.
+- Your account is locked for a while after repeated failed sign-ins.
+
 #### Enable Notifications
 
 - Toggle notifications ON/OFF
@@ -375,9 +372,9 @@ Your farming diary:
 1. **Register/Login** as a doctor
 2. **Verification Pending** page appears
 3. Wait for admin review (usually 1-2 business days)
-4. Receive notification when:
-   -  **Approved:** Full doctor access granted
-   -  **Rejected:** Reason provided, can reapply
+4. Receive a live notification when the admin decides — no need to log out and back in:
+   -  **Approved:** the doctor panel unlocks immediately
+   -  **Rejected / suspended:** the reason is shown, you can resubmit documents
 
 **While Waiting:**
 - Cannot access Doctor Panel
@@ -390,81 +387,37 @@ Your farming diary:
 
 Once verified, you see:
 
-**Statistics:**
-- Active consultations count
-- Pending disease reviews
-- Completed consultations
-- Total patients helped
-
-**Quick Actions:**
-- View consultation queue
-- Review disease detections
-- Check pending appointments
-
-**Recent Activity:**
-- Latest consultations
-- Recent reviews
-- Patient feedback
+**Statistics (live, from your real cases):**
+- Total consultations and pending queue size
+- Responded today
+- Average response time
+- Your average farmer rating
+- Consultations received over the last 7 days (chart)
 
 ---
 
 ### Consultation Queue
 
-#### View Active Consultations
+The dashboard has three tabs that update live — no refresh needed.
 
-**List Shows:**
-- Farmer name
-- Consultation type (Disease, General, Pest, etc.)
-- Priority level (Low/Normal/High)
-- Request date/time
-- Status (Pending/Active/Completed)
+#### Pending
+Requests addressed to you (marked **Requested you**) and open requests any verified doctor may take.
+Each card shows the farmer, location, crop, disease, phone, description, attached crop photos, and whether
+the farmer wants a **chat** or a **callback**.
 
-**Sort & Filter:**
-- By date (newest first)
-- By priority (high first)
-- By type
-- By status
+- **Respond & complete** — write your advice and close the case in one step
+- **Accept & chat** — take the case; it moves to *In progress* and leaves other doctors' queues
+- **Call User** — dial the farmer's registered number (for callback requests)
 
-#### Start a Consultation
+#### In progress
+- Chat with the farmer in real time
+- **Send advice** — share advice but keep the case open
+- **Mark Complete** — close the case (advice is required first)
 
-1. Click on consultation from list
-2. View farmer details
-3. Review their question/problem
-4. See attached photos
-5. View related disease scans (if any)
-6. View crop log (if shared)
+#### Completed
+Your advice, the farmer's star rating and feedback, and your response time.
 
-#### During Consultation
-
-**Provide Diagnosis:**
-- Write diagnosis (বাংলা + English)
-- Be clear and specific
-- Use simple language
-
-**Recommendations:**
-- Treatment steps
-- Medicines/products to use
-- Dosage instructions
-- Timeline
-- Precautions
-
-**Prescriptions:**
-- Product name
-- Application method
-- Frequency
-- Duration
-- Cost estimate (if known)
-
-**Follow-up:**
-- Set follow-up date if needed
-- Mark consultation as requiring follow-up
-
-#### Complete Consultation
-
-1. Click "Mark as Completed"
-2. Consultation moves to history
-3. Farmer receives notification
-4. Farmer can rate your service
+Admins can see every case, change its priority, add a note, or return an accepted case to the queue.
 
 ---
 
