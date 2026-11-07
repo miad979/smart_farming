@@ -633,201 +633,176 @@ function weatherCodeInfo(code) {
   return map[code] || { en: 'Unknown', bn: 'অজানা' }
 }
 
-async function resolveLocationName(lat, lng) {
-  try {
-    const params = new URLSearchParams({
-      latitude: String(lat),
-      longitude: String(lng),
-      language: 'en',
-      format: 'json',
-    })
-    const response = await fetch(`https://geocoding-api.open-meteo.com/v1/reverse?${params.toString()}`)
-    if (!response.ok) return null
-    const payload = await response.json()
-    const place = payload?.results?.[0]
-    if (!place) return null
+// --- Live weather ---------------------------------------------------------------------------------------
+// Primary provider Open-Meteo, automatic fallback MET Norway (api.met.no), both free without keys. Each request
+// has a timeout and identifies the app (MET Norway requires a User-Agent). Hosting providers often share outgoing
+// IP addresses across many apps, so a single provider can refuse requests (rate limit) even at low traffic.
+const WEATHER_FETCH_TIMEOUT_MS = 8000
+const WEATHER_USER_AGENT = `SmartFarming/1.0 (+${String(process.env.PUBLIC_APP_URL || process.env.OPENROUTER_SITE_URL || 'https://github.com/miad979/smart_farming').trim()})`
+const PLACE_NAME_CACHE = new Map()
+const PLACE_NAME_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
-    return {
-      name: place.name || null,
-      admin1: place.admin1 || null,
-      admin2: place.admin2 || null,
-      country: place.country || null,
-      timezone: place.timezone || null,
+async function fetchJsonWithTimeout(url, { timeoutMs = WEATHER_FETCH_TIMEOUT_MS, headers = {} } = {}) {
+  const response = await fetch(url, {
+    headers: { 'User-Agent': WEATHER_USER_AGENT, Accept: 'application/json', ...headers },
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  if (!response.ok) {
+    const error = new Error(`HTTP ${response.status}`)
+    error.status = response.status
+    throw error
+  }
+  return response.json()
+}
+
+/** Place name for coordinates (OpenStreetMap Nominatim), cached per ~1 km for a day. Never throws. */
+async function resolveLocationName(lat, lng) {
+  const key = `${Number(lat).toFixed(2)},${Number(lng).toFixed(2)}`
+  const cached = PLACE_NAME_CACHE.get(key)
+  if (cached && Date.now() - cached.at < PLACE_NAME_CACHE_TTL_MS) return cached.value
+  let value = null
+  try {
+    const params = new URLSearchParams({ lat: String(lat), lon: String(lng), format: 'jsonv2', zoom: '10', 'accept-language': 'en' })
+    const payload = await fetchJsonWithTimeout(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`, { timeoutMs: 5000 })
+    const address = payload?.address || {}
+    value = {
+      name: payload?.name || address.city || address.town || address.village || address.county || null,
+      admin1: address.state || null,
+      admin2: address.state_district || address.county || null,
+      country: address.country || null,
     }
   } catch {
-    return null
+    value = null
+  }
+  PLACE_NAME_CACHE.set(key, { at: Date.now(), value })
+  return value
+}
+
+function formatInZone(date, timeZone, options) {
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone, ...options }).format(date)
+  } catch {
+    return new Intl.DateTimeFormat('en-US', options).format(date)
   }
 }
 
-async function fetchLiveWeather(lat, lng) {
-  const params = new URLSearchParams({
-    latitude: String(lat),
-    longitude: String(lng),
-    current: 'temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,wind_speed_10m,wind_gusts_10m,wind_direction_10m,cloud_cover,pressure_msl,surface_pressure,is_day,uv_index,weather_code',
-    hourly: 'temperature_2m,apparent_temperature,precipitation_probability,precipitation,wind_speed_10m,wind_gusts_10m,dew_point_2m,visibility',
-    daily: 'temperature_2m_max,precipitation_probability_max,precipitation_sum,uv_index_max',
-    timezone: 'auto',
-    forecast_days: '3',
+function hourInZone(date, timeZone) {
+  return Number(formatInZone(date, timeZone, { hour: 'numeric', hour12: false })) % 24
+}
+
+const MET_SYMBOLS = {
+  clearsky: { code: 0, en: 'Clear sky', bn: 'আকাশ পরিষ্কার' },
+  fair: { code: 1, en: 'Mainly clear', bn: 'প্রায় পরিষ্কার' },
+  partlycloudy: { code: 2, en: 'Partly cloudy', bn: 'আংশিক মেঘলা' },
+  cloudy: { code: 3, en: 'Overcast', bn: 'মেঘাচ্ছন্ন' },
+  fog: { code: 45, en: 'Fog', bn: 'কুয়াশা' },
+  lightrain: { code: 61, en: 'Light rain', bn: 'হালকা বৃষ্টি' },
+  rain: { code: 63, en: 'Rain', bn: 'বৃষ্টি' },
+  heavyrain: { code: 65, en: 'Heavy rain', bn: 'ভারী বৃষ্টি' },
+  lightrainshowers: { code: 80, en: 'Light showers', bn: 'হালকা ঝাপটা বৃষ্টি' },
+  rainshowers: { code: 81, en: 'Showers', bn: 'ঝাপটা বৃষ্টি' },
+  heavyrainshowers: { code: 82, en: 'Heavy showers', bn: 'ভারী ঝাপটা' },
+}
+
+function metSymbolInfo(symbolCode) {
+  const base = String(symbolCode || '').replace(/_(day|night|polartwilight)$/, '')
+  if (base.includes('thunder')) return { code: 95, en: 'Thunderstorm', bn: 'বজ্রঝড়' }
+  if (MET_SYMBOLS[base]) return MET_SYMBOLS[base]
+  if (base.includes('sleet') || base.includes('snow')) return { code: 71, en: 'Snow / sleet', bn: 'তুষার / শিলাবৃষ্টি' }
+  if (base.includes('rain')) return MET_SYMBOLS.rain
+  return { code: 3, en: 'Cloudy', bn: 'মেঘলা' }
+}
+
+/**
+ * Common output for every provider: next-24-hour window starting at the current hour, rain summary,
+ * 3-day forecast in the location's time zone, and farm alerts.
+ */
+function buildWeatherPayload({ source, lat, lng, place, timeZone, current, hourly, daily, units }) {
+  const nowMs = Date.now()
+  let start = 0
+  for (let i = 0; i < hourly.length; i += 1) {
+    if (hourly[i].epochMs <= nowMs) start = i
+    else break
+  }
+  const nextDay24Hours = hourly.slice(start, start + 24).map((h) => {
+    const date = new Date(h.epochMs)
+    return {
+      hour: hourInZone(date, timeZone),
+      timeStr: formatInZone(date, timeZone, { hour: '2-digit', minute: '2-digit', hour12: true }),
+      precipProb: Math.round(Number(h.precipProb || 0)),
+      precipAmount: Math.round(Number(h.precipAmount || 0) * 10) / 10,
+      temp: Math.round(Number(h.temp || 0)),
+      feelsLike: Math.round(Number(h.feelsLike ?? h.temp ?? 0)),
+      windSpeed: Math.round(Number(h.windSpeed || 0)),
+      windGust: Math.round(Number(h.windGust || 0)),
+      dewPoint: Number.isFinite(h.dewPoint) ? Math.round(h.dewPoint) : undefined,
+      visibilityKm: Number.isFinite(h.visibilityKm) ? Math.round(h.visibilityKm * 10) / 10 : undefined,
+    }
   })
 
-  const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`)
-  if (!response.ok) {
-    throw new Error('Failed to fetch weather from provider')
-  }
-
-  const payload = await response.json()
-  const locationName = await resolveLocationName(lat, lng)
-  const current = payload.current || {}
-  const currentUnits = payload.current_units || {}
-  const code = Number(current.weather_code || 0)
-  const codeInfo = weatherCodeInfo(code)
-
-  // Extract hourly rain probability for next 24 hours
-  const hourlyTimes = payload.hourly?.time || []
-  const hourlyPrecipProb = payload.hourly?.precipitation_probability || []
-  const hourlyPrecip = payload.hourly?.precipitation || []
-  const hourlyTemp = payload.hourly?.temperature_2m || []
-  const hourlyFeelsLike = payload.hourly?.apparent_temperature || []
-  const hourlyWind = payload.hourly?.wind_speed_10m || []
-  const hourlyGust = payload.hourly?.wind_gusts_10m || []
-  const hourlyDewPoint = payload.hourly?.dew_point_2m || []
-  const hourlyVisibility = payload.hourly?.visibility || []
-
-  const nextDay24Hours = []
-  const currentHourIso = typeof current.time === 'string' ? current.time : ''
-  const matchedCurrentHourIndex = currentHourIso ? hourlyTimes.findIndex((entry) => entry === currentHourIso) : -1
-  let hourlyStartIndex = matchedCurrentHourIndex >= 0 ? matchedCurrentHourIndex : 0
-
-  if (hourlyStartIndex === 0 && hourlyTimes.length > 0 && matchedCurrentHourIndex < 0) {
-    const nowMs = Date.now()
-    const nearestFutureIndex = hourlyTimes.findIndex((entry) => {
-      const timestamp = new Date(entry).getTime()
-      if (!Number.isFinite(timestamp)) return false
-      return timestamp >= nowMs - (30 * 60 * 1000)
-    })
-    if (nearestFutureIndex >= 0) {
-      hourlyStartIndex = nearestFutureIndex
-    }
-  }
-
-  const hourlyEndIndex = Math.min(hourlyStartIndex + 24, hourlyTimes.length)
-
-  for (let i = hourlyStartIndex; i < hourlyEndIndex; i++) {
-    const timeStr = hourlyTimes[i]
-    const time = new Date(timeStr)
-    const hour = time.getHours()
-
-    nextDay24Hours.push({
-      hour,
-      timeStr: time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
-      precipProb: Math.round(Number(hourlyPrecipProb[i] || 0)),
-      precipAmount: Math.round(Number(hourlyPrecip[i] || 0) * 10) / 10, // mm of rain
-      temp: Math.round(Number(hourlyTemp[i] || 0)),
-      feelsLike: Math.round(Number(hourlyFeelsLike[i] || 0)),
-      windSpeed: Math.round(Number(hourlyWind[i] || 0)),
-      windGust: Math.round(Number(hourlyGust[i] || 0)),
-      dewPoint: Math.round(Number(hourlyDewPoint[i] || 0)),
-      visibilityKm: Math.round((Number(hourlyVisibility[i] || 0) / 1000) * 10) / 10,
-    })
-  }
-
-  // Calculate peak rain hour and average probability from upcoming forecast window.
-  const maxRainProb = nextDay24Hours.length > 0
-    ? Math.max(...nextDay24Hours.map((hour) => hour.precipProb), 0)
+  const maxRainProb = nextDay24Hours.length ? Math.max(...nextDay24Hours.map((h) => h.precipProb), 0) : 0
+  const peakRainHour = nextDay24Hours.find((h) => h.precipProb === maxRainProb)
+  const avgRainProb = nextDay24Hours.length
+    ? Math.round(nextDay24Hours.reduce((sum, h) => sum + h.precipProb, 0) / nextDay24Hours.length)
     : 0
-  const peakRainHour = nextDay24Hours.find((hour) => hour.precipProb === maxRainProb)
-  const avgRainProb = nextDay24Hours.length > 0
-    ? Math.round(nextDay24Hours.reduce((sum, hour) => sum + hour.precipProb, 0) / nextDay24Hours.length)
-    : 0
+  const currentHour = nextDay24Hours[0] || null
+  const nextHour = nextDay24Hours[1] || currentHour
 
-  const currentHourForecast = nextDay24Hours[0] || null
-  const nextHourForecast = nextDay24Hours[1] || currentHourForecast
-
-  const forecast = (payload.daily?.time || []).map((dateStr, index) => {
-    const date = new Date(dateStr)
-    const day = date.toLocaleDateString('en-US', { weekday: 'short' })
+  const forecast = daily.slice(0, 3).map((d) => {
+    const day = formatInZone(new Date(d.epochMs), timeZone, { weekday: 'short' })
     return {
       day,
       day_bn: dayBn(day),
-      temp: Math.round(Number(payload.daily?.temperature_2m_max?.[index] || 0)),
-      rainfall: Math.round(Number(payload.daily?.precipitation_probability_max?.[index] || 0)),
-      precipitationSum: Math.round(Number(payload.daily?.precipitation_sum?.[index] || 0) * 10) / 10, // mm
-      uvIndex: Math.round(Number(payload.daily?.uv_index_max?.[index] || 0)),
+      temp: Math.round(Number(d.tempMax || 0)),
+      rainfall: Math.round(Number(d.precipProbMax || 0)),
+      precipitationSum: Math.round(Number(d.precipSum || 0) * 10) / 10,
+      uvIndex: Math.round(Number(d.uvMax || 0)),
     }
   })
 
   const rainfallChance = forecast[0]?.rainfall || 0
-  const nextHourRainProb = Number(nextHourForecast?.precipProb || 0)
-  const windGust = Math.round(Number(current.wind_gusts_10m || 0))
-  const windDirection = Math.round(Number(current.wind_direction_10m || 0))
-  const feelsLike = Math.round(Number(current.apparent_temperature || current.temperature_2m || 0))
-  const cloudCover = Math.round(Number(current.cloud_cover || 0))
-  const uvIndex = Math.round(Number(current.uv_index || 0))
-  const pressure = Math.round(Number(current.pressure_msl || current.surface_pressure || 0))
-  const visibilityKm = Number.isFinite(currentHourForecast?.visibilityKm)
-    ? Number(currentHourForecast.visibilityKm)
-    : 0
-  const dewPoint = Number.isFinite(currentHourForecast?.dewPoint)
-    ? Number(currentHourForecast.dewPoint)
-    : 0
+  const windGust = Math.round(Number(current.windGust || 0))
   const alerts = []
-  if (rainfallChance >= 70) {
-    alerts.push({
-      message: 'Heavy rainfall expected in the next 24 hours',
-      message_bn: 'আগামী ২৪ ঘন্টায় ভারী বৃষ্টির সম্ভাবনা',
-    })
-  }
-  if (rainfallChance >= 50 && rainfallChance < 70) {
-    alerts.push({
-      message: 'Moderate rainfall possible - plan irrigation accordingly',
-      message_bn: 'মধ্যম বৃষ্টির সম্ভাবনা - সেচ পরিকল্পনা অনুযায়ী করুন',
-    })
-  }
-  if (Number(current.temperature_2m) >= 35) {
-    alerts.push({
-      message: 'High temperature stress risk for crops',
-      message_bn: 'উচ্চ তাপমাত্রার কারণে ফসলের চাপের ঝুঁকি',
-    })
-  }
-  if (windGust >= 35) {
-    alerts.push({
-      message: 'Strong wind gusts may affect spraying and young plants',
-      message_bn: 'শক্তিশালী বাতাস স্প্রে ও নতুন গাছের উপর প্রভাব ফেলতে পারে',
-    })
-  }
+  if (rainfallChance >= 70) alerts.push({ message: 'Heavy rainfall expected in the next 24 hours', message_bn: 'আগামী ২৪ ঘন্টায় ভারী বৃষ্টির সম্ভাবনা' })
+  if (rainfallChance >= 50 && rainfallChance < 70) alerts.push({ message: 'Moderate rainfall possible - plan irrigation accordingly', message_bn: 'মধ্যম বৃষ্টির সম্ভাবনা - সেচ পরিকল্পনা অনুযায়ী করুন' })
+  if (Number(current.temp) >= 35) alerts.push({ message: 'High temperature stress risk for crops', message_bn: 'উচ্চ তাপমাত্রার কারণে ফসলের চাপের ঝুঁকি' })
+  if (windGust >= 35) alerts.push({ message: 'Strong wind gusts may affect spraying and young plants', message_bn: 'শক্তিশালী বাতাস স্প্রে ও নতুন গাছের উপর প্রভাব ফেলতে পারে' })
 
+  const feelsLike = Math.round(Number(current.feelsLike ?? current.temp ?? 0))
+  const cloudCover = Math.round(Number(current.cloudCover || 0))
+  const uvIndex = Math.round(Number(current.uvIndex || 0))
   return {
-    source: 'open-meteo',
+    source,
     location: {
       lat: Number(lat),
       lng: Number(lng),
-      name: locationName?.name || null,
-      admin1: locationName?.admin1 || null,
-      admin2: locationName?.admin2 || null,
-      country: locationName?.country || null,
-      timezone: locationName?.timezone || null,
+      name: place?.name || null,
+      admin1: place?.admin1 || null,
+      admin2: place?.admin2 || null,
+      country: place?.country || null,
+      timezone: timeZone || null,
     },
     current: {
-      temp: Math.round(Number(current.temperature_2m || 0)),
+      temp: Math.round(Number(current.temp || 0)),
       feelsLike,
-      condition: codeInfo.en,
-      condition_bn: codeInfo.bn,
-      humidity: Math.round(Number(current.relative_humidity_2m || 0)),
-      rainfall: Math.round(Number(current.precipitation || 0)),
-      rainProbability1h: nextHourRainProb,
+      condition: current.condition.en,
+      condition_bn: current.condition.bn,
+      humidity: Math.round(Number(current.humidity || 0)),
+      rainfall: Math.round(Number(current.precipitation || 0) * 10) / 10,
+      rainProbability1h: Number(nextHour?.precipProb || 0),
       rainProbability: avgRainProb,
-      windSpeed: Math.round(Number(current.wind_speed_10m || 0)),
+      windSpeed: Math.round(Number(current.windSpeed || 0)),
       windGust,
-      windDirection,
+      windDirection: Math.round(Number(current.windDirection || 0)),
       cloudCover,
       uvIndex,
-      pressure,
-      visibilityKm,
-      dewPoint,
-      isDay: Number(current.is_day || 0) === 1,
-      weatherCode: code,
-      unitTemp: currentUnits.temperature_2m || '°C',
-      unitWind: currentUnits.wind_speed_10m || 'km/h',
+      pressure: Math.round(Number(current.pressure || 0)),
+      visibilityKm: currentHour?.visibilityKm,
+      dewPoint: Number.isFinite(current.dewPoint) ? Math.round(current.dewPoint) : currentHour?.dewPoint,
+      isDay: Boolean(current.isDay),
+      weatherCode: current.condition.code,
+      unitTemp: units?.temp || '°C',
+      unitWind: units?.wind || 'km/h',
     },
     rainForecast: {
       nextDay: nextDay24Hours,
@@ -849,6 +824,168 @@ async function fetchLiveWeather(lat, lng) {
   }
 }
 
+async function fetchOpenMeteoWeather(lat, lng) {
+  const params = new URLSearchParams({
+    latitude: String(lat),
+    longitude: String(lng),
+    current: 'temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,wind_speed_10m,wind_gusts_10m,wind_direction_10m,cloud_cover,pressure_msl,surface_pressure,is_day,uv_index,weather_code',
+    hourly: 'temperature_2m,apparent_temperature,precipitation_probability,precipitation,wind_speed_10m,wind_gusts_10m,dew_point_2m,visibility',
+    daily: 'temperature_2m_max,precipitation_probability_max,precipitation_sum,uv_index_max',
+    timezone: 'auto',
+    // Exact instants instead of local wall-clock strings (those were read in the server's time zone,
+    // which shifted the 24-hour window by the UTC offset on hosted servers).
+    timeformat: 'unixtime',
+    forecast_days: '3',
+  })
+  const [payload, place] = await Promise.all([
+    fetchJsonWithTimeout(`https://api.open-meteo.com/v1/forecast?${params.toString()}`),
+    resolveLocationName(lat, lng),
+  ])
+  const c = payload.current || {}
+  const h = payload.hourly || {}
+  const d = payload.daily || {}
+  const hourly = (h.time || []).map((t, i) => ({
+    epochMs: Number(t) * 1000,
+    precipProb: h.precipitation_probability?.[i],
+    precipAmount: h.precipitation?.[i],
+    temp: h.temperature_2m?.[i],
+    feelsLike: h.apparent_temperature?.[i],
+    windSpeed: h.wind_speed_10m?.[i],
+    windGust: h.wind_gusts_10m?.[i],
+    dewPoint: h.dew_point_2m?.[i],
+    visibilityKm: Number.isFinite(Number(h.visibility?.[i])) ? Number(h.visibility[i]) / 1000 : undefined,
+  }))
+  const daily = (d.time || []).map((t, i) => ({
+    epochMs: Number(t) * 1000,
+    tempMax: d.temperature_2m_max?.[i],
+    precipProbMax: d.precipitation_probability_max?.[i],
+    precipSum: d.precipitation_sum?.[i],
+    uvMax: d.uv_index_max?.[i],
+  }))
+  const code = Number(c.weather_code || 0)
+  return buildWeatherPayload({
+    source: 'open-meteo',
+    lat, lng, place,
+    timeZone: payload.timezone || APP_TIMEZONE,
+    current: {
+      temp: c.temperature_2m,
+      feelsLike: c.apparent_temperature ?? c.temperature_2m,
+      humidity: c.relative_humidity_2m,
+      precipitation: c.precipitation,
+      windSpeed: c.wind_speed_10m,
+      windGust: c.wind_gusts_10m,
+      windDirection: c.wind_direction_10m,
+      cloudCover: c.cloud_cover,
+      uvIndex: c.uv_index,
+      pressure: c.pressure_msl || c.surface_pressure,
+      isDay: Number(c.is_day || 0) === 1,
+      condition: { code, ...weatherCodeInfo(code) },
+    },
+    hourly,
+    daily,
+    units: { temp: payload.current_units?.temperature_2m, wind: payload.current_units?.wind_speed_10m },
+  })
+}
+
+async function fetchMetNorwayWeather(lat, lng) {
+  const params = new URLSearchParams({ lat: Number(lat).toFixed(4), lon: Number(lng).toFixed(4) })
+  const [payload, place] = await Promise.all([
+    fetchJsonWithTimeout(`https://api.met.no/weatherapi/locationforecast/2.0/complete?${params.toString()}`),
+    resolveLocationName(lat, lng),
+  ])
+  const series = payload?.properties?.timeseries || []
+  if (!series.length) throw new Error('MET Norway returned no forecast')
+  const timeZone = APP_TIMEZONE
+  const kmh = (ms) => Number(ms || 0) * 3.6
+  // MET gives rain amount, not probability, outside the Nordics: derive a rough chance from the amount.
+  const rainChance = (block) => {
+    const p = Number(block?.details?.probability_of_precipitation)
+    if (Number.isFinite(p)) return p
+    const mm = Number(block?.details?.precipitation_amount || 0)
+    return mm <= 0 ? 0 : Math.min(95, Math.round(35 + mm * 25))
+  }
+  const hourly = series.map((s) => {
+    const i = s.data?.instant?.details || {}
+    return {
+      epochMs: Date.parse(s.time),
+      precipProb: rainChance(s.data?.next_1_hours),
+      precipAmount: s.data?.next_1_hours?.details?.precipitation_amount ?? 0,
+      temp: i.air_temperature,
+      feelsLike: i.apparent_air_temperature ?? i.air_temperature,
+      windSpeed: kmh(i.wind_speed),
+      windGust: kmh(i.wind_speed_of_gust ?? i.wind_speed),
+      dewPoint: i.dew_point_temperature,
+      visibilityKm: undefined,
+      uv: i.ultraviolet_index_clear_sky,
+      symbol: s.data?.next_1_hours?.summary?.symbol_code || s.data?.next_6_hours?.summary?.symbol_code,
+    }
+  })
+  // Daily summary per local calendar day.
+  const byDay = new Map()
+  for (const h of hourly) {
+    const key = farmDateKey(new Date(h.epochMs))
+    const day = byDay.get(key) || { epochMs: h.epochMs, tempMax: -Infinity, precipProbMax: 0, precipSum: 0, uvMax: 0 }
+    day.tempMax = Math.max(day.tempMax, Number(h.temp ?? -Infinity))
+    day.precipProbMax = Math.max(day.precipProbMax, Number(h.precipProb || 0))
+    day.precipSum += Number(h.precipAmount || 0)
+    day.uvMax = Math.max(day.uvMax, Number(h.uv || 0))
+    byDay.set(key, day)
+  }
+  const nowMs = Date.now()
+  const currentEntry = hourly.filter((h) => h.epochMs <= nowMs).pop() || hourly[0]
+  const symbol = String(currentEntry.symbol || '')
+  return buildWeatherPayload({
+    source: 'met-norway',
+    lat, lng, place, timeZone,
+    current: {
+      temp: currentEntry.temp,
+      feelsLike: currentEntry.feelsLike,
+      humidity: series.find((s) => Date.parse(s.time) === currentEntry.epochMs)?.data?.instant?.details?.relative_humidity,
+      precipitation: currentEntry.precipAmount,
+      windSpeed: currentEntry.windSpeed,
+      windGust: currentEntry.windGust,
+      windDirection: series.find((s) => Date.parse(s.time) === currentEntry.epochMs)?.data?.instant?.details?.wind_from_direction,
+      cloudCover: series.find((s) => Date.parse(s.time) === currentEntry.epochMs)?.data?.instant?.details?.cloud_area_fraction,
+      uvIndex: currentEntry.uv,
+      pressure: series.find((s) => Date.parse(s.time) === currentEntry.epochMs)?.data?.instant?.details?.air_pressure_at_sea_level,
+      dewPoint: currentEntry.dewPoint,
+      isDay: symbol.endsWith('_day') || (!symbol.endsWith('_night') && (() => { const hr = hourInZone(new Date(), timeZone); return hr >= 6 && hr < 18 })()),
+      condition: metSymbolInfo(symbol),
+    },
+    hourly,
+    daily: [...byDay.values()],
+    units: { temp: '°C', wind: 'km/h' },
+  })
+}
+
+/** Tries each provider in turn (retrying the primary once on a network error / 5xx). */
+const WEATHER_PROVIDER_FUNCTIONS = { 'open-meteo': fetchOpenMeteoWeather, 'met-norway': fetchMetNorwayWeather }
+// Provider order, e.g. WEATHER_PROVIDERS=met-norway,open-meteo if one provider keeps refusing the host's IP.
+const WEATHER_PROVIDER_ORDER = String(process.env.WEATHER_PROVIDERS || 'open-meteo,met-norway')
+  .split(',').map((p) => p.trim()).filter((p) => WEATHER_PROVIDER_FUNCTIONS[p])
+
+async function fetchLiveWeather(lat, lng) {
+  const errors = []
+  const order = WEATHER_PROVIDER_ORDER.length ? WEATHER_PROVIDER_ORDER : ['open-meteo', 'met-norway']
+  // The first provider gets one retry, but only for transient failures (network error, timeout, 5xx);
+  // a refusal such as HTTP 429 goes straight to the next provider.
+  const attempts = [order[0], order[0], ...order.slice(1)]
+  for (let i = 0; i < attempts.length; i += 1) {
+    const name = attempts[i]
+    if (i === 1 && errors.length && /HTTP 4\d\d/.test(errors[0])) continue
+    try {
+      return await WEATHER_PROVIDER_FUNCTIONS[name](lat, lng)
+    } catch (error) {
+      const reason = `${name}: ${error?.name === 'TimeoutError' ? 'timeout' : (error?.message || 'failed')}`
+      errors.push(reason)
+      console.warn(`[weather] ${reason}`)
+    }
+  }
+  const error = new Error(`All weather providers failed (${errors.join('; ')})`)
+  error.providerErrors = errors
+  throw error
+}
+
 function cacheWeatherPayload(lat, lng, weatherPayload) {
   if (!weatherPayload || typeof weatherPayload !== 'object') return
 
@@ -859,30 +996,42 @@ function cacheWeatherPayload(lat, lng, weatherPayload) {
   })
 }
 
-function getCachedWeatherPayload(lat, lng) {
-  const key = buildWeatherCacheKey(lat, lng)
-  const cached = WEATHER_CACHE.get(key)
-  if (!cached) return null
-  if (!isWeatherCacheFresh(cached, WEATHER_CACHE_TTL_MS)) {
-    WEATHER_CACHE.delete(key)
-    return null
-  }
-  return cached.payload
-}
 
-async function fetchLiveWeatherWithFallback(lat, lng) {
-  try {
-    const weather = await fetchLiveWeather(lat, lng)
-    cacheWeatherPayload(lat, lng, weather)
-    return weather
-  } catch (error) {
-    const cached = getCachedWeatherPayload(lat, lng)
-    if (!cached) {
+// Serve a recent result without calling the provider again (each widget refresh by each visitor used to hit
+// the provider, which on shared hosting IPs quickly leads to rate limiting). If every provider fails, an older
+// result (up to 3 h) is served and clearly marked as degraded.
+const WEATHER_SERVE_FRESH_MS = WEATHER_CACHE_TTL_MS // default 15 min (env WEATHER_CACHE_TTL_MS)
+const WEATHER_STALE_MAX_MS = 3 * 60 * 60 * 1000
+const WEATHER_IN_FLIGHT = new Map()
+
+async function fetchLiveWeatherWithFallback(rawLat, rawLng) {
+  // ~1 km grid: weather does not differ below that, nearby farmers share one cached result, and precise farm
+  // coordinates are not sent to third-party services.
+  const lat = Math.round(Number(rawLat) * 100) / 100
+  const lng = Math.round(Number(rawLng) * 100) / 100
+  const key = buildWeatherCacheKey(lat, lng)
+  const entry = WEATHER_CACHE.get(key)
+  if (entry && isWeatherCacheFresh(entry, WEATHER_SERVE_FRESH_MS)) return entry.payload
+  // Several visitors at once share one provider request.
+  if (WEATHER_IN_FLIGHT.has(key)) return WEATHER_IN_FLIGHT.get(key)
+
+  const pending = (async () => {
+    try {
+      const weather = await fetchLiveWeather(lat, lng)
+      cacheWeatherPayload(lat, lng, weather)
+      return weather
+    } catch (error) {
+      const stale = WEATHER_CACHE.get(key)
+      if (stale && isWeatherCacheFresh(stale, WEATHER_STALE_MAX_MS)) {
+        return buildDegradedWeatherPayload(stale.payload, error?.message || 'Provider fetch failed', nowIso())
+      }
       throw error
     }
-
-    return buildDegradedWeatherPayload(cached, error?.message || 'Provider fetch failed', nowIso())
-  }
+  })().finally(() => {
+    WEATHER_IN_FLIGHT.delete(key)
+  })
+  WEATHER_IN_FLIGHT.set(key, pending)
+  return pending
 }
 
 function estimateYieldAdvice({ crop, moisture, weather }) {
@@ -4375,8 +4524,17 @@ function createLocalApiMiddleware() {
           return send(res, 400, { error: 'Invalid coordinates' })
         }
 
-        const weather = await fetchLiveWeatherWithFallback(lat, lng)
-        return send(res, 200, weather)
+        try {
+          const weather = await fetchLiveWeatherWithFallback(lat, lng)
+          return send(res, 200, weather)
+        } catch (error) {
+          // Not a server crash: the external providers are unreachable. Say so, with the reasons.
+          res.setHeader('Retry-After', '120')
+          return send(res, 503, {
+            error: 'Live weather is temporarily unavailable. Please try again in a few minutes.',
+            providerErrors: error?.providerErrors || [String(error?.message || 'unknown')],
+          })
+        }
       }
 
       // YIELD: real-time advisory based on weather + moisture
@@ -4390,9 +4548,15 @@ function createLocalApiMiddleware() {
           return send(res, 400, { error: 'Invalid advisory parameters' })
         }
 
-        const weather = await fetchLiveWeatherWithFallback(lat, lng)
+        // Advice still works from soil moisture alone if live weather is temporarily unavailable.
+        let weather = null
+        try {
+          weather = await fetchLiveWeatherWithFallback(lat, lng)
+        } catch (error) {
+          console.warn('[weather] yield advice without live weather:', error?.message || error)
+        }
         const advice = estimateYieldAdvice({ crop, moisture, weather })
-        return send(res, 200, { advice, weather })
+        return send(res, 200, { advice, weather, weatherUnavailable: !weather })
       }
 
       // AUTH: signup

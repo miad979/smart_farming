@@ -15,6 +15,7 @@
     "test:actions": "node server/action-workflow-test.cjs",
     "test:consultations": "node server/consultation-workflow-test.cjs",
     "test:irrigation": "node server/irrigation-workflow-test.cjs",
+    "test:weather": "node server/weather-workflow-test.cjs",
     "test:production": "node server/production-readiness-test.cjs",
     "test:load": "node server/load-test.cjs",
     "test:weather:live": "node server/validate-live-weather.cjs",
