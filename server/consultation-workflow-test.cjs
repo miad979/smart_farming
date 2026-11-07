@@ -282,6 +282,16 @@ async function run() {
     assert(events.some((e) => e.channel === `alerts:${doctorCId}` && e.data?.alert?.type === 'verification'), 'No live verification alert');
   });
 
+  await step('check-email: available, already taken, and invalid addresses', async () => {
+    const anon = createClient();
+    const free = await anon.request('POST', '/auth/check-email', { email: 'brand.new.person@example.com' });
+    const taken = await anon.request('POST', '/auth/check-email', { email: 'Farmer.One@smartfarming.local' });
+    const bad = await anon.request('POST', '/auth/check-email', { email: 'not-an-email' });
+    assert(free.status === 200 && free.json.available === true, 'Free email should be available');
+    assert(taken.json.available === false && taken.json.reason === 'taken', 'Existing email (any case) should be reported as taken');
+    assert(bad.json.available === false && bad.json.reason === 'invalid', 'Invalid email should be reported as invalid');
+  });
+
   await step('admins get a live alert when a doctor applies (no page reload needed)', async () => {
     const adminEvents = await admin.listen();
     await wait(100);
