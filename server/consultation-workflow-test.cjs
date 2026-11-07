@@ -282,6 +282,33 @@ async function run() {
     assert(events.some((e) => e.channel === `alerts:${doctorCId}` && e.data?.alert?.type === 'verification'), 'No live verification alert');
   });
 
+  await step('re-uploading the same document after an unfinished attempt works; another account\'s document is blocked', async () => {
+    const crypto = require('crypto');
+    const content = Buffer.from(`%PDF-1.4\n% retry test ${Date.now()}\n`);
+    const sha256 = crypto.createHash('sha256').update(content).digest('hex');
+    const first = createClient();
+    const up1 = await first.request('POST', '/uploads/documents', { fileName: 'licence.pdf', base64Data: content.toString('base64'), contentType: 'application/pdf' });
+    assert(up1.status === 200, `First upload failed (${up1.status})`);
+    // The applicant gives up (no account created) and tries again later from a fresh browser.
+    const retry = createClient();
+    const check = await retry.request('POST', '/uploads/documents/check-hash', { sha256 });
+    assert(check.json.exists === true && check.json.inUse === false, 'Leftover file should be reported as reusable, not in use');
+    const up2 = await retry.request('POST', '/uploads/documents', { fileName: 'licence.pdf', base64Data: content.toString('base64'), contentType: 'application/pdf' });
+    assert(up2.status === 200 && up2.json.reused === true && up2.json.file.id === up1.json.file.id, `Re-upload of the same file should be reused (${up2.status} ${up2.json.error || ''})`);
+    // Once that document belongs to a registered account, nobody else can use it.
+    const s = await retry.request('POST', '/auth/signup', {
+      email: 'doc.retry@smartfarming.local', password: 'Strong!Pass123', name: 'Dr. Retry', role: 'doctor', phone: '+8801700000009',
+      specialty: 'Soil', registrationNumber: 'REG-R', certificateDocument: up2.json.file.url, resumeDocument: 'https://example.com/r.pdf',
+      termsAccepted: true, privacyAccepted: true,
+    });
+    assert(s.status === 200, `Signup with re-used document failed (${s.status})`);
+    const other = createClient();
+    const blockedCheck = await other.request('POST', '/uploads/documents/check-hash', { sha256 });
+    assert(blockedCheck.json.inUse === true && blockedCheck.json.file === null, 'Document on an account should be in use (and its record not exposed)');
+    const blocked = await other.request('POST', '/uploads/documents', { fileName: 'licence.pdf', base64Data: content.toString('base64'), contentType: 'application/pdf' });
+    assert(blocked.status === 409 && blocked.json.inUse === true, `Another account's document must be refused (${blocked.status})`);
+  });
+
   await step('check-email: available, already taken, and invalid addresses', async () => {
     const anon = createClient();
     const free = await anon.request('POST', '/auth/check-email', { email: 'brand.new.person@example.com' });

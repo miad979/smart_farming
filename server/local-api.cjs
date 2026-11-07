@@ -1889,6 +1889,15 @@ function persistUploadedDocument(db, record, meta = {}) {
   }
 }
 
+/** The account whose profile references an uploaded document (certificate / resume), or null if unattached. */
+function findAccountUsingUpload(db, fileName) {
+  if (!fileName) return null
+  const refersToFile = (value) => typeof value === 'string' && value.endsWith(`/uploads/documents/${fileName}`)
+  return Object.values(db.users || {}).find((u) => u && (
+    refersToFile(u.certificateDocument) || refersToFile(u.resumeDocument) || (u.verificationDocuments || []).some(refersToFile)
+  )) || null
+}
+
 function removeUploadedDocument(db, fileName) {
   const upload = db.uploads[fileName]
   if (upload?.sha256) {
@@ -3835,7 +3844,10 @@ function createLocalApiMiddleware() {
 
         const existingId = db.uploadsByHash[sha256]
         const file = existingId ? db.uploads[existingId] || null : null
-        return send(res, 200, { exists: Boolean(file), file })
+        // inUse: the same document is already on another registered account (blocked). An unattached copy
+        // (e.g. from an earlier attempt that never finished) is simply reused by the next upload.
+        const inUse = Boolean(file && findAccountUsingUpload(db, file.id))
+        return send(res, 200, { exists: Boolean(file), inUse, file: inUse ? null : file })
       }
 
       // UPLOADS: upload doctor documents (pre-signup allowed)
@@ -3883,11 +3895,23 @@ function createLocalApiMiddleware() {
         const existingId = db.uploadsByHash[sha256]
         const existing = existingId ? db.uploads[existingId] : null
         if (existing) {
-          return send(res, 409, {
-            error: 'Duplicate file already uploaded',
-            duplicate: true,
-            file: existing,
-          })
+          // The same document on another registered account: refuse (one certificate, one account).
+          if (findAccountUsingUpload(db, existing.id)) {
+            return send(res, 409, {
+              error: 'This document is already used by another registered account. Upload your own document, or contact the administrator.',
+              duplicate: true,
+              inUse: true,
+            })
+          }
+          // Left over from an earlier, unfinished attempt: reuse it so the applicant can continue.
+          // Make sure the bytes are still available (local disk may have been wiped by a redeploy).
+          const existingPath = path.resolve(UPLOADS_DIR, existing.id)
+          if (!fs.existsSync(existingPath)) {
+            ensureUploadsDir()
+            fs.writeFileSync(existingPath, fileBuffer)
+            await storeUploadedFileInSql(existing.id, existing.contentType || mimeFromExtension(ext), fileBuffer)
+          }
+          return send(res, 200, { file: existing, reused: true })
         }
 
         fs.writeFileSync(destination, fileBuffer)
@@ -3928,10 +3952,7 @@ function createLocalApiMiddleware() {
         // happens before sign-up, stay removable so the applicant can replace a wrong file.
         const authId = authUserIdFromReq(req)
         const actor = authId ? db.users[authId] : null
-        const refersToFile = (value) => typeof value === 'string' && value.endsWith(`/uploads/documents/${fileName}`)
-        const attachedTo = Object.values(db.users || {}).find((u) => u && (
-          refersToFile(u.certificateDocument) || refersToFile(u.resumeDocument) || (u.verificationDocuments || []).some(refersToFile)
-        ))
+        const attachedTo = findAccountUsingUpload(db, fileName)
         const uploaderId = db.uploaded_documents?.[fileName]?.user_id || null
         const ownerId = attachedTo?.id || uploaderId
         if (ownerId && ownerId !== authId && !isAdminRole(actor?.role)) {

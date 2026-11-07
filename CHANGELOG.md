@@ -44,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Doctor registration: step 1 now checks the same password rules as the server (live checklist), a valid email and phone, and whether the email is already registered before step 2; step 1 and step 2 data (including uploaded documents) are kept when going back and forth or refreshing (the password is kept in memory only); specialty and license are asked once; step 2 shows field-level errors and an "Edit account details" shortcut; unused SignupModal with an outdated 6-character rule removed
 
+- Doctors could not upload the same certificate/resume again after an earlier failed or abandoned attempt ("already uploaded"); a leftover copy is now reused, only a document already on another registered account is refused, and picking the same file again in the file picker works
+
 ### Deployment
 - Production refuses to start without `DATABASE_URL` (or an explicit `ALLOW_EPHEMERAL_STORAGE=true`) and without `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD`
 - Uploaded documents are stored in Postgres (`app_uploaded_files`) and restored after a redeploy wipes the disk

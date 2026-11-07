@@ -159,11 +159,13 @@ export const DoctorApplicationPage: React.FC = () => {
 
     try {
       const duplicate = await checkUploadedDoctorDocumentDuplicate(file);
-      if (duplicate.exists) {
+      // Only a document already on ANOTHER registered account is blocked. The same file from an earlier,
+      // unfinished attempt is fine: the server reuses the stored copy.
+      if (duplicate.inUse) {
         setCertificateDuplicateWarning(
           lang === 'bn'
-            ? 'এই সার্টিফিকেট ফাইলটি আগে আপলোড করা হয়েছে। অন্য ফাইল দিন বা Remove/Replace ব্যবহার করুন।'
-            : 'This certificate file was already uploaded before. Choose another file or use Remove/Replace.',
+            ? 'এই সার্টিফিকেট ফাইলটি অন্য একটি নিবন্ধিত অ্যাকাউন্টে ব্যবহার করা হয়েছে। নিজের সার্টিফিকেট দিন বা অ্যাডমিনের সাথে যোগাযোগ করুন।'
+            : 'This certificate is already used by another registered account. Upload your own certificate, or contact the administrator.',
         );
         return;
       }
@@ -202,11 +204,11 @@ export const DoctorApplicationPage: React.FC = () => {
 
     try {
       const duplicate = await checkUploadedDoctorDocumentDuplicate(file);
-      if (duplicate.exists) {
+      if (duplicate.inUse) {
         setResumeDuplicateWarning(
           lang === 'bn'
-            ? 'এই রিজিউম ফাইলটি আগে আপলোড করা হয়েছে। অন্য ফাইল দিন বা Remove/Replace ব্যবহার করুন।'
-            : 'This resume file was already uploaded before. Choose another file or use Remove/Replace.',
+            ? 'এই রিজিউম ফাইলটি অন্য একটি নিবন্ধিত অ্যাকাউন্টে ব্যবহার করা হয়েছে। নিজের রিজিউম দিন বা অ্যাডমিনের সাথে যোগাযোগ করুন।'
+            : 'This resume is already used by another registered account. Upload your own resume, or contact the administrator.',
         );
         return;
       }
@@ -531,7 +533,12 @@ export const DoctorApplicationPage: React.FC = () => {
                 id="certificate-upload-input"
                 type="file"
                 accept=".pdf,.png,.jpg,.jpeg"
-                onChange={(e) => void onCertificateChange(e.target.files?.[0] || null)}
+                onChange={(e) => {
+                  const picked = e.target.files?.[0] || null;
+                  // Clear the picker so choosing the same file again (after a failure) still triggers an upload.
+                  e.target.value = '';
+                  void onCertificateChange(picked);
+                }}
                 className="sr-only"
                 disabled={Boolean(certificateDocument)}
               />
@@ -625,7 +632,11 @@ export const DoctorApplicationPage: React.FC = () => {
                 id="resume-upload-input"
                 type="file"
                 accept=".pdf,.png,.jpg,.jpeg"
-                onChange={(e) => void onResumeChange(e.target.files?.[0] || null)}
+                onChange={(e) => {
+                  const picked = e.target.files?.[0] || null;
+                  e.target.value = '';
+                  void onResumeChange(picked);
+                }}
                 className="sr-only"
                 disabled={Boolean(resumeDocument)}
               />
