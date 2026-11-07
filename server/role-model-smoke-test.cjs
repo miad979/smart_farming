@@ -2,6 +2,11 @@ const http = require('http');
 const path = require('path');
 
 async function run() {
+  // Isolated data: never use (or depend on) the developer's real local database.
+  process.chdir(require('fs').mkdtempSync(path.join(require('os').tmpdir(), 'sf-role-smoke-')));
+  process.env.DATABASE_URL = '';
+  process.env.AUTH_TOKEN_SECRET = process.env.AUTH_TOKEN_SECRET || 'role_model_smoke_secret_2026';
+
   const { createLocalApiMiddleware } = require(path.resolve(__dirname, 'local-api.cjs'));
   const middleware = createLocalApiMiddleware();
   const server = http.createServer((req, res) => {

@@ -344,6 +344,8 @@ export const RealtimeProvider: React.FC<{ children: ReactNode }> = ({ children }
           type: 'system',
           title: alert.type === 'verification'
             ? (lang === 'bn' ? 'ভেরিফিকেশন আপডেট' : 'Verification update')
+            : alert.type === 'doctor_application'
+              ? (lang === 'bn' ? 'নতুন ডাক্তার আবেদন' : 'New doctor application')
             : alert.type === 'security'
               ? (lang === 'bn' ? 'নিরাপত্তা সতর্কতা' : 'Security alert')
               : (lang === 'bn' ? 'অ্যাকাউন্ট আপডেট' : 'Account update'),
@@ -353,6 +355,10 @@ export const RealtimeProvider: React.FC<{ children: ReactNode }> = ({ children }
         // Role or verification changed on the server: reload the profile so gated pages update now.
         if (alert.type === 'verification' || alert.type === 'access') {
           void syncDataRef.current();
+        }
+        // A doctor applied: open admin screens (verification page, dashboard) reload their user lists.
+        if (alert.type === 'doctor_application') {
+          triggerSoftRefresh('admin-users', 'doctor-application');
         }
       }
     );

@@ -18,6 +18,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Link } from 'react-router';
 import { AdminConsultationsPanel } from '../components/AdminConsultationsPanel';
+import { useLiveRefresh } from '../hooks/useLiveRefresh';
 
 export const AdminDashboard: React.FC = () => {
   const { state } = useApp();
@@ -136,14 +137,14 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
-  const refreshUsers = async () => {
+  const refreshUsers = async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!state.accessToken) {
       setIsLoadingUsers(false);
       setUsersLoadError(lang === 'bn' ? 'সেশন নেই, আবার লগইন করুন' : 'No active session, please sign in again');
       return;
     }
     try {
-      setIsLoadingUsers(true);
+      if (!silent) setIsLoadingUsers(true);
       setUsersLoadError(null);
       const res = await api.getAllUsers(state.accessToken);
       const sorted = [...(res.users || [])].sort((a, b) => {
@@ -154,6 +155,8 @@ export const AdminDashboard: React.FC = () => {
       setUsers(sorted);
       void refreshSensorStatuses();
     } catch (error: any) {
+      // A failed background refresh keeps the list that is already on screen.
+      if (silent) return;
       setUsers([]);
       const status = Number(error?.status || 0);
       const message = String(error?.message || '').toLowerCase();
@@ -171,6 +174,9 @@ export const AdminDashboard: React.FC = () => {
   useEffect(() => {
     void refreshUsers();
   }, [state.accessToken, lang]);
+
+  // New doctor applications / user changes appear without reloading the page.
+  useLiveRefresh(() => refreshUsers({ silent: true }), ['admin-users', 'doctor-verification'], { enabled: Boolean(state.accessToken) });
 
   useEffect(() => {
     if (!state.accessToken) return;

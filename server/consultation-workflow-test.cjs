@@ -282,6 +282,32 @@ async function run() {
     assert(events.some((e) => e.channel === `alerts:${doctorCId}` && e.data?.alert?.type === 'verification'), 'No live verification alert');
   });
 
+  await step('check-email: available, already taken, and invalid addresses', async () => {
+    const anon = createClient();
+    const free = await anon.request('POST', '/auth/check-email', { email: 'brand.new.person@example.com' });
+    const taken = await anon.request('POST', '/auth/check-email', { email: 'Farmer.One@smartfarming.local' });
+    const bad = await anon.request('POST', '/auth/check-email', { email: 'not-an-email' });
+    assert(free.status === 200 && free.json.available === true, 'Free email should be available');
+    assert(taken.json.available === false && taken.json.reason === 'taken', 'Existing email (any case) should be reported as taken');
+    assert(bad.json.available === false && bad.json.reason === 'invalid', 'Invalid email should be reported as invalid');
+  });
+
+  await step('admins get a live alert when a doctor applies (no page reload needed)', async () => {
+    const adminEvents = await admin.listen();
+    await wait(100);
+    const applicant = createClient();
+    const s = await applicant.request('POST', '/auth/signup', {
+      email: 'doc.e@smartfarming.local', password: 'Strong!Pass123', name: 'Dr. Epsilon', role: 'doctor', phone: '+8801700000005',
+      specialty: 'Entomology', registrationNumber: 'REG-E', certificateDocument: 'https://example.com/c.pdf', resumeDocument: 'https://example.com/r.pdf',
+      termsAccepted: true, privacyAccepted: true,
+    });
+    assert(s.status === 200, `Doctor application failed (${s.status})`);
+    await wait(150);
+    assert(adminEvents.some((e) => String(e.channel).startsWith('alerts:') && e.data?.alert?.type === 'doctor_application' && /Dr\. Epsilon/.test(e.data.alert.message)), 'Admin got no live doctor-application alert');
+    const pending = await admin.request('GET', '/doctors/pending');
+    assert(pending.json.doctors.some((d) => d.email === 'doc.e@smartfarming.local' && d.specialty === 'Entomology'), 'Application missing from pending list');
+  });
+
   await step('uploaded documents: attached ones are protected, unattached drafts can be removed', async () => {
     const anon = createClient();
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
