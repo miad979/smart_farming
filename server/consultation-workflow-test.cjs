@@ -10,7 +10,7 @@ async function run() {
   process.chdir(tempDir);
   process.env.AUTH_TOKEN_SECRET = 'ci_consultation_test_secret_2026';
 
-  const { createLocalApiMiddleware } = require(path.resolve(__dirname, 'local-api.cjs'));
+  const { createLocalApiMiddleware, runUploadCleanupOnce } = require(path.resolve(__dirname, 'local-api.cjs'));
   const middleware = createLocalApiMiddleware();
   const server = http.createServer((req, res) => {
     middleware(req, res, () => {
@@ -282,6 +282,33 @@ async function run() {
     assert(events.some((e) => e.channel === `alerts:${doctorCId}` && e.data?.alert?.type === 'verification'), 'No live verification alert');
   });
 
+  await step('re-uploading the same document after an unfinished attempt works; another account\'s document is blocked', async () => {
+    const crypto = require('crypto');
+    const content = Buffer.from(`%PDF-1.4\n% retry test ${Date.now()}\n`);
+    const sha256 = crypto.createHash('sha256').update(content).digest('hex');
+    const first = createClient();
+    const up1 = await first.request('POST', '/uploads/documents', { fileName: 'licence.pdf', base64Data: content.toString('base64'), contentType: 'application/pdf' });
+    assert(up1.status === 200, `First upload failed (${up1.status})`);
+    // The applicant gives up (no account created) and tries again later from a fresh browser.
+    const retry = createClient();
+    const check = await retry.request('POST', '/uploads/documents/check-hash', { sha256 });
+    assert(check.json.exists === true && check.json.inUse === false, 'Leftover file should be reported as reusable, not in use');
+    const up2 = await retry.request('POST', '/uploads/documents', { fileName: 'licence.pdf', base64Data: content.toString('base64'), contentType: 'application/pdf' });
+    assert(up2.status === 200 && up2.json.reused === true && up2.json.file.id === up1.json.file.id, `Re-upload of the same file should be reused (${up2.status} ${up2.json.error || ''})`);
+    // Once that document belongs to a registered account, nobody else can use it.
+    const s = await retry.request('POST', '/auth/signup', {
+      email: 'doc.retry@smartfarming.local', password: 'Strong!Pass123', name: 'Dr. Retry', role: 'doctor', phone: '+8801700000009',
+      specialty: 'Soil', registrationNumber: 'REG-R', certificateDocument: up2.json.file.url, resumeDocument: 'https://example.com/r.pdf',
+      termsAccepted: true, privacyAccepted: true,
+    });
+    assert(s.status === 200, `Signup with re-used document failed (${s.status})`);
+    const other = createClient();
+    const blockedCheck = await other.request('POST', '/uploads/documents/check-hash', { sha256 });
+    assert(blockedCheck.json.inUse === true && blockedCheck.json.file === null, 'Document on an account should be in use (and its record not exposed)');
+    const blocked = await other.request('POST', '/uploads/documents', { fileName: 'licence.pdf', base64Data: content.toString('base64'), contentType: 'application/pdf' });
+    assert(blocked.status === 409 && blocked.json.inUse === true, `Another account's document must be refused (${blocked.status})`);
+  });
+
   await step('check-email: available, already taken, and invalid addresses', async () => {
     const anon = createClient();
     const free = await anon.request('POST', '/auth/check-email', { email: 'brand.new.person@example.com' });
@@ -306,6 +333,47 @@ async function run() {
     assert(adminEvents.some((e) => String(e.channel).startsWith('alerts:') && e.data?.alert?.type === 'doctor_application' && /Dr\. Epsilon/.test(e.data.alert.message)), 'Admin got no live doctor-application alert');
     const pending = await admin.request('GET', '/doctors/pending');
     assert(pending.json.doctors.some((d) => d.email === 'doc.e@smartfarming.local' && d.specialty === 'Entomology'), 'Application missing from pending list');
+  });
+
+  await step('abandoned uploads are deleted after 24 h; registered doctors\' documents are kept; expired links are refused', async () => {
+    const anon = createClient();
+    const mk = (tag) => Buffer.from(`%PDF-1.4\n% ${tag} ${Date.now()} ${Math.random()}\n`).toString('base64');
+    const orphan = await anon.request('POST', '/uploads/documents', { fileName: 'abandoned.pdf', base64Data: mk('orphan'), contentType: 'application/pdf' });
+    const kept = await anon.request('POST', '/uploads/documents', { fileName: 'kept.pdf', base64Data: mk('kept'), contentType: 'application/pdf' });
+    const fresh = await anon.request('POST', '/uploads/documents', { fileName: 'fresh.pdf', base64Data: mk('fresh'), contentType: 'application/pdf' });
+    assert([orphan, kept, fresh].every((r) => r.status === 200), 'Uploads failed');
+    const reg = await anon.request('POST', '/auth/signup', {
+      email: 'doc.kept@smartfarming.local', password: 'Strong!Pass123', name: 'Dr. Kept', role: 'doctor', phone: '+8801700000010',
+      specialty: 'Agronomy', registrationNumber: 'REG-K', certificateDocument: kept.json.file.url, resumeDocument: 'https://example.com/r.pdf',
+      termsAccepted: true, privacyAccepted: true,
+    });
+    assert(reg.status === 200, `Signup failed (${reg.status})`);
+
+    // Pretend two days have passed for the orphan and the kept document (not for the fresh one).
+    const fs = require('fs');
+    const dbFile = path.resolve(process.cwd(), '.local-db.json');
+    const db = JSON.parse(fs.readFileSync(dbFile, 'utf8'));
+    const old = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
+    db.uploads[orphan.json.file.id].uploadedAt = old;
+    db.uploads[kept.json.file.id].uploadedAt = old;
+    fs.writeFileSync(dbFile, JSON.stringify(db));
+    await wait(20);
+
+    const removed = await runUploadCleanupOnce();
+    assert(removed === 1, `Expected exactly 1 abandoned upload removed, got ${removed}`);
+    const gone = await anon.request('GET', `/uploads/documents/${orphan.json.file.id}`);
+    assert(gone.status === 404, `Abandoned upload should be deleted (${gone.status})`);
+    const stillThere = await anon.request('GET', `/uploads/documents/${kept.json.file.id}`);
+    assert(stillThere.status === 200, `Registered doctor's document must be kept (${stillThere.status})`);
+    const recent = await anon.request('GET', `/uploads/documents/${fresh.json.file.id}`);
+    assert(recent.status === 200, `A recent draft upload must be kept (${recent.status})`);
+
+    const late = await anon.request('POST', '/auth/signup', {
+      email: 'doc.late@smartfarming.local', password: 'Strong!Pass123', name: 'Dr. Late', role: 'doctor', phone: '+8801700000011',
+      specialty: 'Agronomy', registrationNumber: 'REG-L', certificateDocument: orphan.json.file.url, resumeDocument: fresh.json.file.url,
+      termsAccepted: true, privacyAccepted: true,
+    });
+    assert(late.status === 400 && late.json.expiredDocuments === true, `Signup with an expired upload must be refused (${late.status})`);
   });
 
   await step('uploaded documents: attached ones are protected, unattached drafts can be removed', async () => {

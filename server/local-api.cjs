@@ -1889,6 +1889,15 @@ function persistUploadedDocument(db, record, meta = {}) {
   }
 }
 
+/** The account whose profile references an uploaded document (certificate / resume), or null if unattached. */
+function findAccountUsingUpload(db, fileName) {
+  if (!fileName) return null
+  const refersToFile = (value) => typeof value === 'string' && value.endsWith(`/uploads/documents/${fileName}`)
+  return Object.values(db.users || {}).find((u) => u && (
+    refersToFile(u.certificateDocument) || refersToFile(u.resumeDocument) || (u.verificationDocuments || []).some(refersToFile)
+  )) || null
+}
+
 function removeUploadedDocument(db, fileName) {
   const upload = db.uploads[fileName]
   if (upload?.sha256) {
@@ -2551,6 +2560,72 @@ function runLiveMarketDrift(db, options = {}) {
     profile: MARKET_VOLATILITY_PROFILE,
     updateIntervalMs: MARKET_REALTIME_AUTO_UPDATE_MS,
   }
+}
+
+// --- Temporary (draft) document uploads --------------------------------------------------------------
+// Doctor documents are uploaded during step 2, before the account exists. They become permanent only when
+// an account references them; unattached uploads (abandoned applications) are deleted after this TTL so
+// applicants' personal documents are not kept without a registration.
+const UPLOAD_DRAFT_TTL_MS = Math.max(15 * 60 * 1000, parseEnvInt('UPLOAD_DRAFT_TTL_HOURS', 24, 1) * 60 * 60 * 1000)
+const UPLOAD_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
+let uploadCleanupStarted = false
+let uploadCleanupInFlight = false
+
+/** Deletes unattached uploads older than the draft TTL. Returns the number removed. */
+async function purgeAbandonedUploads(db, now = Date.now()) {
+  let removed = 0
+  for (const upload of Object.values(db.uploads || {})) {
+    if (!upload?.id) continue
+    const uploadedAt = Date.parse(upload.uploadedAt || '') || 0
+    if (now - uploadedAt < UPLOAD_DRAFT_TTL_MS) continue
+    if (findAccountUsingUpload(db, upload.id)) continue
+    const filePath = path.resolve(UPLOADS_DIR, path.basename(upload.id))
+    if (filePath.startsWith(UPLOADS_DIR) && fs.existsSync(filePath)) {
+      try { fs.unlinkSync(filePath) } catch { /* already gone */ }
+    }
+    await deleteUploadedFileFromSql(upload.id)
+    removeUploadedDocument(db, upload.id)
+    removed += 1
+  }
+  return removed
+}
+
+/** Ids of /uploads/documents/<id> references in `values` that no longer exist (expired or deleted). */
+function findMissingUploadReferences(db, values) {
+  return values
+    .filter((v) => typeof v === 'string' && v.includes('/uploads/documents/'))
+    .map((v) => path.basename(v.split('?')[0]))
+    .filter((fileId) => !db.uploads?.[fileId])
+}
+
+/** One cleanup pass (also exported for tests). Returns the number of uploads removed. */
+async function runUploadCleanupOnce() {
+  if (uploadCleanupInFlight) return 0
+  uploadCleanupInFlight = true
+  try {
+    const db = await loadDb()
+    const removed = await purgeAbandonedUploads(db)
+    if (removed > 0) {
+      saveDb(db)
+      console.log(`[uploads] Removed ${removed} unattached document upload(s) older than ${Math.round(UPLOAD_DRAFT_TTL_MS / 3600000)}h`)
+    }
+    return removed
+  } catch (error) {
+    console.error('Upload cleanup failed', error)
+    return 0
+  } finally {
+    uploadCleanupInFlight = false
+  }
+}
+
+function startUploadCleanupLoop() {
+  if (uploadCleanupStarted) return
+  uploadCleanupStarted = true
+  const run = () => { void runUploadCleanupOnce() }
+  const timer = setInterval(run, UPLOAD_CLEANUP_INTERVAL_MS)
+  if (typeof timer.unref === 'function') timer.unref()
+  const first = setTimeout(run, 30 * 1000) // also shortly after start (e.g. after a redeploy)
+  if (typeof first.unref === 'function') first.unref()
 }
 
 function startMarketRealtimeAutoUpdateLoop() {
@@ -3755,6 +3830,7 @@ async function generateTtsWithElevenLabs(text, language, apiKey) {
 
 function createLocalApiMiddleware() {
   startMarketRealtimeAutoUpdateLoop()
+  startUploadCleanupLoop()
   return async function localApi(req, res, next) {
     try {
       const url = parseUrl(req)
@@ -3835,7 +3911,10 @@ function createLocalApiMiddleware() {
 
         const existingId = db.uploadsByHash[sha256]
         const file = existingId ? db.uploads[existingId] || null : null
-        return send(res, 200, { exists: Boolean(file), file })
+        // inUse: the same document is already on another registered account (blocked). An unattached copy
+        // (e.g. from an earlier attempt that never finished) is simply reused by the next upload.
+        const inUse = Boolean(file && findAccountUsingUpload(db, file.id))
+        return send(res, 200, { exists: Boolean(file), inUse, file: inUse ? null : file })
       }
 
       // UPLOADS: upload doctor documents (pre-signup allowed)
@@ -3883,11 +3962,23 @@ function createLocalApiMiddleware() {
         const existingId = db.uploadsByHash[sha256]
         const existing = existingId ? db.uploads[existingId] : null
         if (existing) {
-          return send(res, 409, {
-            error: 'Duplicate file already uploaded',
-            duplicate: true,
-            file: existing,
-          })
+          // The same document on another registered account: refuse (one certificate, one account).
+          if (findAccountUsingUpload(db, existing.id)) {
+            return send(res, 409, {
+              error: 'This document is already used by another registered account. Upload your own document, or contact the administrator.',
+              duplicate: true,
+              inUse: true,
+            })
+          }
+          // Left over from an earlier, unfinished attempt: reuse it so the applicant can continue.
+          // Make sure the bytes are still available (local disk may have been wiped by a redeploy).
+          const existingPath = path.resolve(UPLOADS_DIR, existing.id)
+          if (!fs.existsSync(existingPath)) {
+            ensureUploadsDir()
+            fs.writeFileSync(existingPath, fileBuffer)
+            await storeUploadedFileInSql(existing.id, existing.contentType || mimeFromExtension(ext), fileBuffer)
+          }
+          return send(res, 200, { file: existing, reused: true })
         }
 
         fs.writeFileSync(destination, fileBuffer)
@@ -3928,10 +4019,7 @@ function createLocalApiMiddleware() {
         // happens before sign-up, stay removable so the applicant can replace a wrong file.
         const authId = authUserIdFromReq(req)
         const actor = authId ? db.users[authId] : null
-        const refersToFile = (value) => typeof value === 'string' && value.endsWith(`/uploads/documents/${fileName}`)
-        const attachedTo = Object.values(db.users || {}).find((u) => u && (
-          refersToFile(u.certificateDocument) || refersToFile(u.resumeDocument) || (u.verificationDocuments || []).some(refersToFile)
-        ))
+        const attachedTo = findAccountUsingUpload(db, fileName)
         const uploaderId = db.uploaded_documents?.[fileName]?.user_id || null
         const ownerId = attachedTo?.id || uploaderId
         if (ownerId && ownerId !== authId && !isAdminRole(actor?.role)) {
@@ -4237,6 +4325,15 @@ function createLocalApiMiddleware() {
           if (!specialty || !phone || !registrationNumber || !certificateDocument || !resumeDocument) {
             return send(res, 400, {
               error: 'Doctor signup requires phone, specialty, license number, certificate document, and resume document',
+            })
+          }
+          // Uploaded drafts expire if the application is not finished in time; never create an account
+          // that points at documents which no longer exist.
+          const missing = findMissingUploadReferences(db, [certificateDocument, resumeDocument])
+          if (missing.length > 0) {
+            return send(res, 400, {
+              error: 'Your uploaded document has expired or was removed. Please upload your certificate and resume again.',
+              expiredDocuments: true,
             })
           }
         }
@@ -5796,5 +5893,5 @@ function createLocalApiMiddleware() {
   }
 }
 
-module.exports = { createLocalApiMiddleware, flushPendingWrites }
+module.exports = { createLocalApiMiddleware, flushPendingWrites, runUploadCleanupOnce }
 

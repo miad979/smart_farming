@@ -405,8 +405,13 @@ export async function computeFileSha256(file: File): Promise<string> {
     .join('');
 }
 
+/**
+ * exists: the server already has this exact file. inUse: it belongs to another registered account
+ * (upload is refused). exists && !inUse means a leftover from an earlier attempt, which is reused.
+ */
 export async function checkUploadedDoctorDocumentDuplicate(file: File): Promise<{
   exists: boolean;
+  inUse: boolean;
   file: UploadedDocumentFile | null;
   sha256: string;
 }> {
@@ -426,6 +431,7 @@ export async function checkUploadedDoctorDocumentDuplicate(file: File): Promise<
   const payload = await response.json();
   return {
     exists: Boolean(payload?.exists),
+    inUse: Boolean(payload?.inUse),
     file: payload?.file || null,
     sha256,
   };

@@ -159,11 +159,13 @@ export const DoctorApplicationPage: React.FC = () => {
 
     try {
       const duplicate = await checkUploadedDoctorDocumentDuplicate(file);
-      if (duplicate.exists) {
+      // Only a document already on ANOTHER registered account is blocked. The same file from an earlier,
+      // unfinished attempt is fine: the server reuses the stored copy.
+      if (duplicate.inUse) {
         setCertificateDuplicateWarning(
           lang === 'bn'
-            ? 'এই সার্টিফিকেট ফাইলটি আগে আপলোড করা হয়েছে। অন্য ফাইল দিন বা Remove/Replace ব্যবহার করুন।'
-            : 'This certificate file was already uploaded before. Choose another file or use Remove/Replace.',
+            ? 'এই সার্টিফিকেট ফাইলটি অন্য একটি নিবন্ধিত অ্যাকাউন্টে ব্যবহার করা হয়েছে। নিজের সার্টিফিকেট দিন বা অ্যাডমিনের সাথে যোগাযোগ করুন।'
+            : 'This certificate is already used by another registered account. Upload your own certificate, or contact the administrator.',
         );
         return;
       }
@@ -202,11 +204,11 @@ export const DoctorApplicationPage: React.FC = () => {
 
     try {
       const duplicate = await checkUploadedDoctorDocumentDuplicate(file);
-      if (duplicate.exists) {
+      if (duplicate.inUse) {
         setResumeDuplicateWarning(
           lang === 'bn'
-            ? 'এই রিজিউম ফাইলটি আগে আপলোড করা হয়েছে। অন্য ফাইল দিন বা Remove/Replace ব্যবহার করুন।'
-            : 'This resume file was already uploaded before. Choose another file or use Remove/Replace.',
+            ? 'এই রিজিউম ফাইলটি অন্য একটি নিবন্ধিত অ্যাকাউন্টে ব্যবহার করা হয়েছে। নিজের রিজিউম দিন বা অ্যাডমিনের সাথে যোগাযোগ করুন।'
+            : 'This resume is already used by another registered account. Upload your own resume, or contact the administrator.',
         );
         return;
       }
@@ -356,6 +358,19 @@ export const DoctorApplicationPage: React.FC = () => {
 
     if (!result.success) {
       const message = result.error || (lang === 'bn' ? 'সাবমিট ব্যর্থ হয়েছে' : 'Submission failed');
+      // Expired draft uploads: clear them so the doctor can simply upload again (everything else is kept).
+      if (/expired|upload your certificate and resume again/i.test(message)) {
+        replaceCertificate();
+        replaceResume();
+        setFieldErrors({
+          certificate: lang === 'bn' ? 'সার্টিফিকেট আবার আপলোড করুন' : 'Please upload your certificate again',
+          resume: lang === 'bn' ? 'রিজিউম আবার আপলোড করুন' : 'Please upload your resume again',
+        });
+        setError(lang === 'bn'
+          ? 'আপনার আপলোড করা ডকুমেন্টের মেয়াদ শেষ হয়েছে (২৪ ঘণ্টার মধ্যে আবেদন সম্পন্ন হয়নি)। ডকুমেন্ট আবার আপলোড করে সাবমিট করুন।'
+          : 'Your uploaded documents expired (the application was not finished within 24 hours). Upload them again and submit.');
+        return;
+      }
       // Problems with the account itself (email taken, password rule) are fixed in step 1; nothing is lost.
       setAccountError(/email|password|already exists/i.test(message));
       setError(message);
@@ -511,6 +526,12 @@ export const DoctorApplicationPage: React.FC = () => {
             {fieldErrors.experienceYears && <p className="mt-1 text-xs text-red-600">{fieldErrors.experienceYears}</p>}
           </div>
 
+          <p className="text-xs text-slate-600">
+            {lang === 'bn'
+              ? 'ডকুমেন্টগুলো শুধু অ্যাডমিন যাচাইয়ের জন্য। আবেদন জমা না দিলে আপলোড করা ফাইল ২৪ ঘণ্টা পরে স্বয়ংক্রিয়ভাবে মুছে ফেলা হয়।'
+              : 'Documents are used only for admin verification. If you do not submit the application, uploaded files are deleted automatically after 24 hours.'}
+          </p>
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="rounded-3xl border border-blue-200 bg-gradient-to-br from-blue-50 via-cyan-50 to-sky-50 p-4 shadow-sm">
               <div className="flex items-center justify-between gap-3 mb-3">
@@ -531,7 +552,12 @@ export const DoctorApplicationPage: React.FC = () => {
                 id="certificate-upload-input"
                 type="file"
                 accept=".pdf,.png,.jpg,.jpeg"
-                onChange={(e) => void onCertificateChange(e.target.files?.[0] || null)}
+                onChange={(e) => {
+                  const picked = e.target.files?.[0] || null;
+                  // Clear the picker so choosing the same file again (after a failure) still triggers an upload.
+                  e.target.value = '';
+                  void onCertificateChange(picked);
+                }}
                 className="sr-only"
                 disabled={Boolean(certificateDocument)}
               />
@@ -625,7 +651,11 @@ export const DoctorApplicationPage: React.FC = () => {
                 id="resume-upload-input"
                 type="file"
                 accept=".pdf,.png,.jpg,.jpeg"
-                onChange={(e) => void onResumeChange(e.target.files?.[0] || null)}
+                onChange={(e) => {
+                  const picked = e.target.files?.[0] || null;
+                  e.target.value = '';
+                  void onResumeChange(picked);
+                }}
                 className="sr-only"
                 disabled={Boolean(resumeDocument)}
               />
