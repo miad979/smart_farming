@@ -10,7 +10,9 @@ services:
     healthCheckPath: /api/health
     # --ignore-scripts: a dependency (msedge-tts) ships a pnpm-only preinstall guard (`npx only-allow pnpm`)
     # that can abort an npm install; no dependency needs its install script for this app (see docs/DEPLOYMENT.md).
-    buildCommand: npm ci --ignore-scripts && npm run build
+    # --include=dev: NODE_ENV=production is also set during the build, which makes npm skip devDependencies,
+    # but the build tools (vite, tailwind, plugins) are devDependencies.
+    buildCommand: npm ci --ignore-scripts --include=dev && npm run build
     # Run node directly (not through npm) so SIGTERM reaches the server for a graceful shutdown.
     startCommand: node server/start-production.cjs
     envVars:
