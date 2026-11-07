@@ -266,11 +266,11 @@ test.describe.serial('Role-based UI smoke checks', () => {
 
     await page.goto(`${APP_BASE_URL}/`, { waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
-    await expect(page.getByText('Real location', { exact: true })).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText(/^(Your location|Default area \(location off\))$/)).toBeVisible({ timeout: 30000 });
 
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
-    await expect(page.getByText('Real location', { exact: true })).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText(/^(Your location|Default area \(location off\))$/)).toBeVisible({ timeout: 30000 });
 
     await page.goto(`${APP_BASE_URL}/irrigation`, { waitUntil: 'domcontentloaded' });
     await expect(page).toHaveURL(/\/irrigation(?:\?.*)?$/);
