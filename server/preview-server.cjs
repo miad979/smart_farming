@@ -22,9 +22,10 @@ function buildDefaultCsp() {
     "frame-ancestors 'none'",
     "object-src 'none'",
     "script-src 'self'",
-    "style-src 'self' 'unsafe-inline'",
+    // Google Fonts (Inter, Noto Sans Bengali) are imported in src/styles/fonts.css.
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data: blob: https:",
-    "font-src 'self' data:",
+    "font-src 'self' data: https://fonts.gstatic.com",
     `connect-src ${connectSrc}`,
     "media-src 'self' data: blob:",
     "worker-src 'self' blob:",

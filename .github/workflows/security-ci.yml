@@ -47,6 +47,9 @@ jobs:
       - name: Consultation, account and document-ownership workflow
         run: npm run test:consultations
 
+      - name: Irrigation workflow (sensor, pump, auto mode, settings, concurrency)
+        run: npm run test:irrigation
+
       - name: Production readiness (prod mode, demo passwords, proxy IPs, static server, redeploy persistence)
         env:
           TEST_DATABASE_URL: postgresql://sftest:sftest@127.0.0.1:5432/sftest
