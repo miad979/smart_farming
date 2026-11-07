@@ -2707,6 +2707,10 @@ function enforceRouteRateLimits(req, res, { method, pathname, ip }) {
     if (!applyRateLimit(res, `signin:${ip}`, 10 * 60 * 1000, RATE_LIMIT_SIGNIN_PER_10_MINUTES)) return false
   }
 
+  if (method === 'POST' && pathname === '/auth/check-email') {
+    if (!applyRateLimit(res, `check-email:${ip}`, 10 * 60 * 1000, RATE_LIMIT_SIGNUP_PER_10_MINUTES * 4)) return false
+  }
+
   if (method === 'POST' && pathname === '/auth/change-password') {
     if (!applyRateLimit(res, `change-password:${ip}`, 10 * 60 * 1000, RATE_LIMIT_SIGNIN_PER_10_MINUTES)) return false
   }
@@ -4297,6 +4301,19 @@ function createLocalApiMiddleware() {
           accessToken,
           message: 'User created successfully',
         })
+      }
+
+      // AUTH: check that an email can be used, so the two-step doctor sign-up can stop at step 1 instead of
+      // failing after documents are uploaded. Reveals nothing beyond what /auth/signup already reports.
+      if (method === 'POST' && pathname === '/auth/check-email') {
+        const body = await readJsonBody(req)
+        const normalizedEmail = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : ''
+        const ev = validateEmail(normalizedEmail)
+        if (!ev.valid) return send(res, 200, { available: false, reason: 'invalid', error: ev.error })
+        if (db.usersByEmail[normalizedEmail]) {
+          return send(res, 200, { available: false, reason: 'taken', error: 'User already exists with this email address' })
+        }
+        return send(res, 200, { available: true })
       }
 
       // AUTH: signin

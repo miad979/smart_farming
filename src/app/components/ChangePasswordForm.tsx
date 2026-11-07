@@ -1,16 +1,16 @@
 import React, { useState } from 'react';
 import { Lock } from 'lucide-react';
 import { changePassword } from '../utils/api';
+import { isStrongPassword } from '../utils/signupValidation';
 
 interface ChangePasswordFormProps {
   token: string;
   lang: 'bn' | 'en';
 }
 
-// Mirrors the server rule in validatePasswordStrength (server/local-api.cjs).
+// Same rules as the server (shared with sign-up via utils/signupValidation).
 const passwordProblem = (pw: string, lang: 'bn' | 'en'): string | null => {
-  const ok = pw.length >= 10 && /[a-z]/.test(pw) && /[A-Z]/.test(pw) && /[0-9]/.test(pw) && /[^A-Za-z0-9]/.test(pw);
-  if (ok) return null;
+  if (isStrongPassword(pw)) return null;
   return lang === 'bn'
     ? 'কমপক্ষে ১০ অক্ষর, বড় ও ছোট হাতের অক্ষর, সংখ্যা এবং বিশেষ চিহ্ন দিন'
     : 'Use 10+ characters with upper and lower case letters, a number and a symbol';

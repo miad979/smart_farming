@@ -165,6 +165,18 @@ export interface AvailableExpert {
 
 // ==================== AUTHENTICATION ====================
 
+/** Whether an email can be used for a new account (checked before step 2 of doctor sign-up). */
+export async function checkEmailAvailable(email: string): Promise<{ available: boolean; reason?: 'invalid' | 'taken'; error?: string }> {
+  const response = await apiRequest(`${API_BASE_URL}/auth/check-email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+  const body = await readJsonSafely(response);
+  if (!response.ok) throw new Error(body.error || 'Could not check the email address');
+  return body;
+}
+
 export async function signUp(data: {
   email: string;
   password: string;

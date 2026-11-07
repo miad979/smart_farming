@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { useApp } from '../context/AppContext';
-import { AlertCircle, FileCheck2, Lock, LockOpen } from 'lucide-react';
+import { AlertCircle, ArrowLeft, FileCheck2, Lock, LockOpen } from 'lucide-react';
+import { clearSignupDraft, getSignupDraft, updateSignupDraft, type SignupDraft } from '../utils/signupDraft';
+import { isStrongPassword, isValidEmail, isValidPhone } from '../utils/signupValidation';
 import {
   ALLOWED_DOCTOR_UPLOAD_MIME_TYPES,
   MAX_DOCTOR_UPLOAD_SIZE_BYTES,
@@ -10,37 +12,61 @@ import {
   uploadDoctorDocument,
 } from '../utils/api';
 
-type DoctorSignupState = {
-  name: string;
-  email: string;
-  phone: string;
-  password: string;
-  confirmPassword: string;
-  location: string;
-  role: 'doctor';
-  termsAccepted: boolean;
-  privacyAccepted: boolean;
-};
+type FieldErrors = Partial<Record<'specialty' | 'phone' | 'registrationNumber' | 'experienceYears' | 'certificate' | 'resume', string>>;
 
 export const DoctorApplicationPage: React.FC = () => {
   const { state, signup } = useApp();
   const navigate = useNavigate();
-  const location = useLocation();
   const lang = state.language;
 
-  const base = useMemo(() => (location.state || null) as DoctorSignupState | null, [location.state]);
+  // Step 1 data comes from the shared sign-up draft (kept while moving between steps).
+  const draft = useMemo(() => getSignupDraft(), []);
+  const step1Complete = Boolean(
+    draft.name.trim() && isValidEmail(draft.email) && isStrongPassword(draft.password)
+    && draft.password === draft.confirmPassword && draft.termsAccepted && draft.privacyAccepted,
+  );
+  // After a page refresh the password is gone (never stored), everything else is still there.
+  const passwordLostOnRefresh = Boolean(draft.name && draft.email && !draft.password);
+  const base = step1Complete ? draft : null;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [accountError, setAccountError] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [successMessage, setSuccessMessage] = useState('');
 
-  const [specialty, setSpecialty] = useState('');
-  const [phone, setPhone] = useState(base?.phone || '');
-  const [useSignupPhone, setUseSignupPhone] = useState(Boolean(base?.phone));
-  const [registrationNumber, setRegistrationNumber] = useState('');
-  const [experienceYears, setExperienceYears] = useState('');
-  const [certificateDocument, setCertificateDocument] = useState('');
-  const [resumeDocument, setResumeDocument] = useState('');
-  const [profileSummary, setProfileSummary] = useState('');
+  const [specialty, setSpecialtyState] = useState(draft.specialty);
+  const [phone, setPhoneState] = useState(draft.doctorPhone || draft.phone || '');
+  const [useSignupPhone, setUseSignupPhoneState] = useState(draft.useSignupPhone && Boolean(draft.phone));
+  const [registrationNumber, setRegistrationNumberState] = useState(draft.registrationNumber);
+  const [experienceYears, setExperienceYearsState] = useState(draft.experienceYears);
+  const [certificateDocument, setCertificateDocumentState] = useState(draft.certificateDocument);
+  const [resumeDocument, setResumeDocumentState] = useState(draft.resumeDocument);
+  const [profileSummary, setProfileSummaryState] = useState(draft.profileSummary);
+
+  // Every change is mirrored into the draft, so Back to step 1 and returning keeps it (uploads included).
+  const persist = (patch: Partial<SignupDraft>) => updateSignupDraft(patch);
+  const clearFieldError = (key: keyof FieldErrors) => setFieldErrors((prev) => {
+    if (!prev[key]) return prev;
+    const next = { ...prev };
+    delete next[key];
+    return next;
+  });
+  const setSpecialty = (v: string) => { setSpecialtyState(v); persist({ specialty: v }); clearFieldError('specialty'); };
+  const setPhone = (v: string) => { setPhoneState(v); persist({ doctorPhone: v }); clearFieldError('phone'); };
+  const setUseSignupPhone = (v: boolean) => { setUseSignupPhoneState(v); persist({ useSignupPhone: v }); };
+  const setRegistrationNumber = (v: string) => { setRegistrationNumberState(v); persist({ registrationNumber: v }); clearFieldError('registrationNumber'); };
+  const setExperienceYears = (v: string) => { setExperienceYearsState(v); persist({ experienceYears: v }); clearFieldError('experienceYears'); };
+  const setProfileSummary = (v: string) => { setProfileSummaryState(v); persist({ profileSummary: v }); };
+  const setCertificateDocument = (url: string, fileName = '') => {
+    setCertificateDocumentState(url);
+    persist({ certificateDocument: url, certificateFileName: url ? fileName : '' });
+    if (url) clearFieldError('certificate');
+  };
+  const setResumeDocument = (url: string, fileName = '') => {
+    setResumeDocumentState(url);
+    persist({ resumeDocument: url, resumeFileName: url ? fileName : '' });
+    if (url) clearFieldError('resume');
+  };
   const [certificateFile, setCertificateFile] = useState<File | null>(null);
   const [resumeFile, setResumeFile] = useState<File | null>(null);
   const [certificateProgress, setCertificateProgress] = useState(0);
@@ -97,7 +123,7 @@ export const DoctorApplicationPage: React.FC = () => {
 
     try {
       const { file: uploadedFile } = await uploadDoctorDocument(file, setCertificateProgress);
-      setCertificateDocument(uploadedFile.url);
+      setCertificateDocument(uploadedFile.url, file.name);
     } catch (e: any) {
       setError(e?.message || (lang === 'bn' ? 'সার্টিফিকেট আপলোড ব্যর্থ হয়েছে' : 'Certificate upload failed'));
     } finally {
@@ -204,7 +230,7 @@ export const DoctorApplicationPage: React.FC = () => {
 
     try {
       const { file: uploadedFile } = await uploadDoctorDocument(file, setResumeProgress);
-      setResumeDocument(uploadedFile.url);
+      setResumeDocument(uploadedFile.url, file.name);
     } catch (e: any) {
       setError(e?.message || (lang === 'bn' ? 'রিজিউম আপলোড ব্যর্থ হয়েছে' : 'Resume upload failed'));
     } finally {
@@ -270,20 +296,15 @@ export const DoctorApplicationPage: React.FC = () => {
     setError('');
     setSuccessMessage('');
 
+    setAccountError(false);
+
+    // Step 1 must be complete (normally guaranteed by step 1's own checks).
     if (!base) {
-      setError(lang === 'bn' ? 'প্রথমে সাইন আপ ফর্ম পূরণ করুন' : 'Please complete the signup form first');
-      return;
-    }
-
-    if (useSignupPhone && base.phone) {
-      setPhone(base.phone);
-    }
-
-    if (!base.termsAccepted || !base.privacyAccepted) {
+      setAccountError(true);
       setError(
-        lang === 'bn'
-          ? 'শর্তাবলী এবং প্রাইভেসি পলিসি গ্রহণ না করলে আবেদন করা যাবে না'
-          : 'Terms and Privacy acceptance is required before application',
+        passwordLostOnRefresh
+          ? (lang === 'bn' ? 'নিরাপত্তার জন্য পেজ রিফ্রেশের পরে পাসওয়ার্ড রাখা হয় না। ধাপ ১-এ পাসওয়ার্ড আবার লিখুন, বাকি তথ্য রাখা আছে।' : 'For security, your password is not kept after a page refresh. Re-enter it in step 1; everything else is kept.')
+          : (lang === 'bn' ? 'প্রথমে ধাপ ১ (অ্যাকাউন্টের তথ্য) সম্পূর্ণ করুন' : 'Please complete step 1 (account details) first'),
       );
       return;
     }
@@ -296,39 +317,52 @@ export const DoctorApplicationPage: React.FC = () => {
       await uploadResume(resumeFile);
     }
 
-    if (!specialty || !phone.trim() || !registrationNumber || !certificateDocument || !resumeDocument) {
-      setError(
-        lang === 'bn'
-          ? 'স্পেশালটি, ফোন নম্বর, লাইসেন্স নম্বর, এবং আপলোড করা সার্টিফিকেট/রিজিউম আবশ্যক'
-          : 'Specialty, phone number, license number, and uploaded certificate/resume are required',
-      );
+    // Check every step-2 field and show what is missing next to each field.
+    const effectivePhone = (useSignupPhone && base.phone ? base.phone : phone).trim();
+    const errors: FieldErrors = {};
+    if (!specialty.trim()) errors.specialty = lang === 'bn' ? 'বিশেষত্ব লিখুন' : 'Specialty is required';
+    if (!effectivePhone) errors.phone = lang === 'bn' ? 'ফোন নম্বর লিখুন' : 'Phone number is required';
+    else if (!isValidPhone(effectivePhone)) errors.phone = lang === 'bn' ? 'সঠিক ফোন নম্বর লিখুন' : 'Enter a valid phone number';
+    if (!registrationNumber.trim()) errors.registrationNumber = lang === 'bn' ? 'লাইসেন্স নম্বর লিখুন' : 'License number is required';
+    if (experienceYears && (!Number.isFinite(Number(experienceYears)) || Number(experienceYears) < 0 || Number(experienceYears) > 70)) {
+      errors.experienceYears = lang === 'bn' ? '০ থেকে ৭০ এর মধ্যে লিখুন' : 'Enter a number from 0 to 70';
+    }
+    if (!certificateDocument) errors.certificate = lang === 'bn' ? 'সার্টিফিকেট আপলোড করুন' : 'Upload your certificate';
+    if (!resumeDocument) errors.resume = lang === 'bn' ? 'রিজিউম আপলোড করুন' : 'Upload your resume';
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) {
+      setError(lang === 'bn' ? 'লাল চিহ্নিত ঘরগুলো পূরণ করুন' : 'Please complete the highlighted fields');
       return;
     }
 
     setIsSubmitting(true);
     const result = await signup({
-      name: base.name,
-      email: base.email,
+      name: base.name.trim(),
+      email: base.email.trim(),
       password: base.password,
-      location: base.location,
+      location: base.location.trim(),
       role: 'doctor',
-      phone: phone.trim(),
+      phone: effectivePhone,
       termsAccepted: base.termsAccepted,
       privacyAccepted: base.privacyAccepted,
-      specialty,
-      registrationNumber,
+      specialty: specialty.trim(),
+      registrationNumber: registrationNumber.trim(),
       experienceYears: Number(experienceYears || 0),
       certificateDocument,
       resumeDocument,
-      profileSummary,
+      profileSummary: profileSummary.trim(),
     });
     setIsSubmitting(false);
 
     if (!result.success) {
-      setError(result.error || (lang === 'bn' ? 'সাবমিট ব্যর্থ হয়েছে' : 'Submission failed'));
+      const message = result.error || (lang === 'bn' ? 'সাবমিট ব্যর্থ হয়েছে' : 'Submission failed');
+      // Problems with the account itself (email taken, password rule) are fixed in step 1; nothing is lost.
+      setAccountError(/email|password|already exists/i.test(message));
+      setError(message);
       return;
     }
 
+    clearSignupDraft();
     setSuccessMessage(
       result.message ||
         (lang === 'bn'
@@ -345,6 +379,9 @@ export const DoctorApplicationPage: React.FC = () => {
           <div className="absolute -right-16 -top-16 h-40 w-40 rounded-full bg-white/10" />
           <div className="absolute -left-8 bottom-0 h-28 w-28 rounded-full bg-white/10" />
           <div className="relative">
+          <p className="mb-2 inline-block rounded-full bg-white/20 px-3 py-1 text-xs font-semibold">
+            {lang === 'bn' ? 'ধাপ ২/২ · পেশাগত তথ্য ও ডকুমেন্ট' : 'Step 2 of 2 · Professional details and documents'}
+          </p>
           <h1 className="text-2xl font-bold">
             {lang === 'bn' ? 'ডাক্তার যাচাইকরণ ডকুমেন্ট সাবমিশন' : 'Doctor Verification Document Submission'}
           </h1>
@@ -355,16 +392,30 @@ export const DoctorApplicationPage: React.FC = () => {
         </div>
 
         <div className="p-6 space-y-4 bg-gradient-to-b from-slate-50 to-white">
-          {!base && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-sm">
-              {lang === 'bn' ? 'বেসিক সাইন আপ তথ্য পাওয়া যায়নি' : 'Basic signup data was not found'}
+          {!base && !successMessage && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <span>
+                {passwordLostOnRefresh
+                  ? (lang === 'bn' ? 'নিরাপত্তার জন্য পেজ রিফ্রেশের পরে পাসওয়ার্ড রাখা হয় না। ধাপ ১-এ পাসওয়ার্ড আবার লিখুন — বাকি সব তথ্য ও ডকুমেন্ট রাখা আছে।' : 'For security, your password is not kept after a page refresh. Re-enter it in step 1 — everything else, including uploaded documents, is kept.')
+                  : (lang === 'bn' ? 'প্রথমে ধাপ ১-এ আপনার অ্যাকাউন্টের তথ্য দিন।' : 'Please fill in your account details in step 1 first.')}
+              </span>
+              <button type="button" onClick={() => navigate('/signup')} className="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-white font-medium hover:bg-amber-700">
+                {lang === 'bn' ? 'ধাপ ১-এ যান' : 'Go to step 1'}
+              </button>
             </div>
           )}
 
           {error && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm flex items-center gap-2">
-              <AlertCircle className="w-4 h-4" />
-              {error}
+            <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <span className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                {error}
+              </span>
+              {accountError && (
+                <button type="button" onClick={() => navigate('/signup')} className="shrink-0 rounded-lg border border-red-300 bg-white px-3 py-1.5 font-medium text-red-700 hover:bg-red-100">
+                  {lang === 'bn' ? 'অ্যাকাউন্টের তথ্য সম্পাদনা (ধাপ ১)' : 'Edit account details (step 1)'}
+                </button>
+              )}
             </div>
           )}
 
@@ -390,8 +441,11 @@ export const DoctorApplicationPage: React.FC = () => {
                 type="text"
                 value={specialty}
                 onChange={(e) => setSpecialty(e.target.value)}
-                className="w-full px-4 py-3 border border-emerald-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                placeholder={lang === 'bn' ? 'যেমন: ফসল রোগ বিশেষজ্ঞ' : 'e.g. Crop Disease Specialist'}
+                aria-invalid={Boolean(fieldErrors.specialty)}
+                className={`w-full px-4 py-3 border rounded-xl bg-white focus:outline-none focus:ring-2 ${fieldErrors.specialty ? 'border-red-400 focus:ring-red-400' : 'border-emerald-200 focus:ring-emerald-500'}`}
               />
+              {fieldErrors.specialty && <p className="mt-1 text-xs text-red-600">{fieldErrors.specialty}</p>}
             </div>
             <div className="rounded-2xl border border-violet-200 bg-violet-50/70 p-4 shadow-sm">
               <div className="flex items-center justify-between gap-2 mb-1">
@@ -428,6 +482,7 @@ export const DoctorApplicationPage: React.FC = () => {
                   {lang === 'bn' ? 'সাইনআপে দেওয়া ফোন নম্বর ব্যবহার করা হবে। পরিবর্তন করতে লক বন্ধ করুন।' : 'Using phone from signup. Unlock to override.'}
                 </p>
               )}
+              {fieldErrors.phone && <p className="mt-1 text-xs text-red-600">{fieldErrors.phone}</p>}
             </div>
             <div className="rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4 shadow-sm">
               <label className="block text-sm font-semibold mb-1 text-cyan-950">{lang === 'bn' ? 'লাইসেন্স নম্বর' : 'License Number'}</label>
@@ -435,8 +490,11 @@ export const DoctorApplicationPage: React.FC = () => {
                 type="text"
                 value={registrationNumber}
                 onChange={(e) => setRegistrationNumber(e.target.value)}
-                className="w-full px-4 py-3 border border-cyan-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                placeholder={lang === 'bn' ? 'আপনার রেজিস্ট্রেশন/লাইসেন্স নম্বর' : 'Your registration / license number'}
+                aria-invalid={Boolean(fieldErrors.registrationNumber)}
+                className={`w-full px-4 py-3 border rounded-xl bg-white focus:outline-none focus:ring-2 ${fieldErrors.registrationNumber ? 'border-red-400 focus:ring-red-400' : 'border-cyan-200 focus:ring-cyan-500'}`}
               />
+              {fieldErrors.registrationNumber && <p className="mt-1 text-xs text-red-600">{fieldErrors.registrationNumber}</p>}
             </div>
           </div>
 
@@ -447,8 +505,10 @@ export const DoctorApplicationPage: React.FC = () => {
               min={0}
               value={experienceYears}
               onChange={(e) => setExperienceYears(e.target.value)}
-              className="w-full px-4 py-3 border border-indigo-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              aria-invalid={Boolean(fieldErrors.experienceYears)}
+              className={`w-full px-4 py-3 border rounded-xl bg-white focus:outline-none focus:ring-2 ${fieldErrors.experienceYears ? 'border-red-400 focus:ring-red-400' : 'border-indigo-200 focus:ring-indigo-500'}`}
             />
+            {fieldErrors.experienceYears && <p className="mt-1 text-xs text-red-600">{fieldErrors.experienceYears}</p>}
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -480,7 +540,11 @@ export const DoctorApplicationPage: React.FC = () => {
                 htmlFor="certificate-upload-input"
                 className="mb-3 flex cursor-pointer items-center justify-center rounded-2xl border-2 border-dashed border-blue-300 bg-white/80 px-4 py-4 text-center font-semibold text-blue-700 transition hover:border-blue-500 hover:bg-blue-100"
               >
-                {certificateFile ? certificateFile.name : (lang === 'bn' ? 'ফাইল নির্বাচন করুন' : 'Choose certificate file')}
+                {certificateFile
+                  ? certificateFile.name
+                  : certificateDocument && getSignupDraft().certificateFileName
+                    ? getSignupDraft().certificateFileName
+                    : (lang === 'bn' ? 'ফাইল নির্বাচন করুন' : 'Choose certificate file')}
               </label>
 
               <div className="flex flex-wrap gap-2">
@@ -529,6 +593,10 @@ export const DoctorApplicationPage: React.FC = () => {
                 </div>
               )}
 
+              {fieldErrors.certificate && !certificateDocument && (
+                <p className="mt-3 text-xs font-medium text-red-600">{fieldErrors.certificate}</p>
+              )}
+
               {certificateDocument && (
                 <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm">
                   <a href={certificateDocument} target="_blank" rel="noreferrer" className="font-semibold text-emerald-800 hover:underline">
@@ -566,7 +634,11 @@ export const DoctorApplicationPage: React.FC = () => {
                 htmlFor="resume-upload-input"
                 className="mb-3 flex cursor-pointer items-center justify-center rounded-2xl border-2 border-dashed border-indigo-300 bg-white/80 px-4 py-4 text-center font-semibold text-indigo-700 transition hover:border-indigo-500 hover:bg-indigo-100"
               >
-                {resumeFile ? resumeFile.name : (lang === 'bn' ? 'ফাইল নির্বাচন করুন' : 'Choose resume file')}
+                {resumeFile
+                  ? resumeFile.name
+                  : resumeDocument && getSignupDraft().resumeFileName
+                    ? getSignupDraft().resumeFileName
+                    : (lang === 'bn' ? 'ফাইল নির্বাচন করুন' : 'Choose resume file')}
               </label>
 
               <div className="flex flex-wrap gap-2">
@@ -615,6 +687,10 @@ export const DoctorApplicationPage: React.FC = () => {
                 </div>
               )}
 
+              {fieldErrors.resume && !resumeDocument && (
+                <p className="mt-3 text-xs font-medium text-red-600">{fieldErrors.resume}</p>
+              )}
+
               {resumeDocument && (
                 <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm">
                   <a href={resumeDocument} target="_blank" rel="noreferrer" className="font-semibold text-emerald-800 hover:underline">
@@ -641,9 +717,11 @@ export const DoctorApplicationPage: React.FC = () => {
             <button
               type="button"
               onClick={() => navigate('/signup')}
-              className="px-4 py-2.5 border border-gray-300 rounded-lg hover:bg-gray-50"
+              disabled={isSubmitting || Boolean(successMessage)}
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-60"
             >
-              {lang === 'bn' ? 'ফিরে যান' : 'Back'}
+              <ArrowLeft className="w-4 h-4" />
+              {lang === 'bn' ? 'ধাপ ১-এ ফিরুন' : 'Back to step 1'}
             </button>
             <button
               type="button"
