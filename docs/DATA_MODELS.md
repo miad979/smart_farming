@@ -514,79 +514,58 @@ interface AgriculturalWeather {
 
 ### Consultation Model
 
+> Implemented model (local API, `server/local-api.cjs`; client type `Consultation` in `src/app/utils/api.ts`).
+
 ```typescript
 interface Consultation {
-  consultationId: string;
+  id: string;
   farmerId: string;
   farmerName: string;
-  farmerName_bn: string;
-  doctorId: string;
-  doctorName: string;
-  doctorName_bn: string;
-  
-  // Consultation Details
-  type: 'disease' | 'general' | 'pest' | 'soil' | 'nutrition';
-  status: 'pending' | 'active' | 'completed' | 'cancelled';
-  priority: 'low' | 'normal' | 'high';
-  
-  // Related Data
-  diseaseDetectionId?: string;      // If related to disease scan
-  cropLogId?: string;               // If related to crop log
-  
-  // Content
-  subject: string;
-  subject_bn: string;
-  description: string;
-  description_bn: string;
-  images?: string[];
-  
-  // Communication
-  messages: Message[];
-  
-  // Scheduling
-  requestedAt: string;
-  scheduledAt?: string;
-  startedAt?: string;
-  completedAt?: string;
-  
-  // Outcome
-  diagnosis?: string;
-  diagnosis_bn?: string;
-  recommendations?: string[];
-  recommendations_bn?: string[];
-  prescriptions?: Prescription[];
-  followUpRequired: boolean;
-  followUpDate?: string;
-  
-  // Feedback
-  rating?: number;
+  farmerEmail?: string;
+  farmerPhone?: string;            // visible to the handling doctor and admins only
+  crop: string; crop_bn: string;
+  disease: string; disease_bn: string;
+  description: string; description_en: string;   // max 2000 chars
+  location: string; location_bn: string;
+  priority: 'low' | 'medium' | 'high';
+  mode: 'chat' | 'call';           // 'call' = farmer asked for a callback
+  status: 'pending' | 'in-progress' | 'completed';
+
+  requestedDoctorId: string | null; // expert the farmer chose (null = open to all verified doctors)
+  requestedDoctorName: string | null;
+  doctorId?: string | null;         // doctor who accepted / claimed the case
+  doctorName?: string | null;
+  doctorSpecialty?: string;
+
+  images: string[];                 // max 3; only data:image/* or http(s) URLs are kept
+  messages: ConsultationMessage[];  // farmer <-> doctor chat, max 200 kept
+
+  doctorResponse?: string;          // the doctor's advice (also stored as `response`)
+  responseTime?: string; responseTime_bn?: string;   // submitted -> first advice
+  adminNote?: string;               // admin / super user oversight note (max 500)
+  rating?: number;                  // 1-5, farmer, only after completion
   feedback?: string;
+
+  submittedAt: string; updatedAt: string;
+  acceptedAt?: string | null; respondedAt?: string; completedAt?: string;
 }
 
-interface Message {
-  messageId: string;
+interface ConsultationMessage {
+  id: string;
   senderId: string;
+  senderName: string;
   senderRole: 'farmer' | 'doctor';
-  content: string;
-  timestamp: string;
-  read: boolean;
-  attachments?: string[];
-}
-
-interface Prescription {
-  product: string;
-  product_bn: string;
-  type: 'pesticide' | 'fungicide' | 'fertilizer' | 'medicine';
-  dosage: string;
-  dosage_bn: string;
-  frequency: string;
-  frequency_bn: string;
-  duration: string;
-  duration_bn: string;
-  notes?: string;
-  notes_bn?: string;
+  text: string;                     // max 2000 chars
+  createdAt: string;
 }
 ```
+
+**Lifecycle:** `pending` → (doctor accepts, or sends the first chat message) `in-progress` → (doctor writes advice
+and completes) `completed`. A doctor can answer and complete directly from `pending`. An admin can return an
+`in-progress` case to `pending`, which releases the doctor. Completed cases are closed to new messages.
+
+**Visibility:** the farmer sees only their own cases; a verified doctor sees cases assigned to them plus pending cases
+that are either addressed to them or open to everyone; admins see all.
 
 ---
 
@@ -911,50 +890,31 @@ Response: {
 
 ### Consultations
 
-#### POST /api/consultations/request
-```typescript
-Request: {
-  farmerId: string;
-  doctorId?: string;
-  type: string;
-  subject: string;
-  description: string;
-  images?: string[];
-}
+> Implemented endpoints. All require a signed-in user; mutating requests also need the `X-CSRF-Token` header.
 
-Response: {
-  success: boolean;
-  consultation: Consultation;
-}
-```
+| Method & path | Who | Purpose |
+|---|---|---|
+| `POST /api/consultations` | farmer | Create a request. Body: `crop, disease, description, priority?, mode? ('chat'|'call'), expertId?, images?`. `expertId` must be a verified doctor. |
+| `GET /api/consultations` | all roles | List the cases the caller may see (see visibility above), newest first. |
+| `PUT /api/consultations/:id` | doctor, admin | Doctor: `{ status: 'in-progress' }` to accept, `{ response, status: 'completed' }` to advise and close. Only status and advice are accepted from doctors. Admin: `status`, `priority`, `adminNote`. |
+| `POST /api/consultations/:id/messages` | farmer owner, assigned doctor | Add a chat message `{ text }`. A doctor's first message claims a pending case. 409 once completed. |
+| `POST /api/consultations/:id/rating` | farmer owner | `{ rating: 1-5, feedback? }`, only after completion. |
 
-#### GET /api/consultations/list
-```typescript
-Query: {
-  userId: string;
-  role: 'farmer' | 'doctor';
-  status?: string;
-}
+Errors: `400` invalid input, `401` not signed in, `403` wrong role, `404` not found **or not visible to the caller**,
+`409` wrong state (e.g. message on a completed case).
 
-Response: {
-  success: boolean;
-  consultations: Consultation[];
-}
-```
+### Account
 
-#### POST /api/consultations/message
-```typescript
-Request: {
-  consultationId: string;
-  senderId: string;
-  content: string;
-}
+| Method & path | Purpose |
+|---|---|
+| `POST /api/auth/change-password` | `{ currentPassword, newPassword }`. Verifies the current password, applies the sign-up strength rule (10+ chars, upper, lower, number, symbol), rate limited, audit logged. |
 
-Response: {
-  success: boolean;
-  message: Message;
-}
-```
+Unknown `/api/*` routes return a JSON `404` (`{ "error": "Unknown API route: ..." }`) instead of the app page.
+
+### Uploaded documents
+
+`DELETE /api/uploads/documents/:id` — a document attached to an account (or uploaded by a signed-in user) can only be
+deleted by that user or an admin (`403` otherwise). Unattached drafts from the doctor application form stay removable.
 
 ---
 

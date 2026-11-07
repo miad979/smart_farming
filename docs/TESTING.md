@@ -19,7 +19,7 @@ It includes:
 - Active branch protection required check: required-ui-smoke
 - Runtime model: full Node runtime (frontend + backend API + realtime)
 - Latest verified deployment automation commit: b47edfb
-- Last documentation refresh date: 2026-04-16
+- Last documentation refresh date: 2026-11-07
 
 ## 3) Testing Scope
 
@@ -81,6 +81,11 @@ npm run build
 3. Security checks
 ```bash
 npm run test:security
+```
+
+3.1 Consultation, account and document-ownership workflow (farmer ↔ doctor ↔ admin, realtime isolation)
+```bash
+npm run test:consultations
 ```
 
 4. UI smoke checks (desktop + role flow)
@@ -1423,9 +1428,93 @@ Release summary:
 Result:
 - Release branch workflow completed and `main`/`release/stable` are aligned post-merge.
 
+## 18) Full-Project Functional Gap Audit (2026-11-07)
+
+Scope: three passes over the whole project — (1) automated checks, (2) code review for functional,
+realtime and security gaps, (3) re-verification after fixes.
+
+### Pass 1 — automated
+- Type check (strict, ad-hoc config; the repo has no `tsconfig.json`, Vite only strips types):
+  found `VoiceRecorder.tsx` could not compile (component declaration missing), effect cleanups
+  returning values, nullable user id passed as a string, route guards typed without optional children.
+  All fixed; strict check now reports 0 errors outside the generated `components/ui` kit.
+- Playwright initially failed to launch: installed Chromium build (1248) did not match the
+  Playwright version (1217). Environment issue, fixed with `npx playwright install chromium`.
+
+### Pass 2 — gaps found and fixed
+| Area | Gap | Fix |
+|---|---|---|
+| Consultations | Farmers had no page for replies; doctor advice saved under a field the UI never read; dashboard buttons inert; chosen expert ignored; fake call number | My Consultations page, live chat, advice, completion, rating; working doctor queue; expert routing; callback flow |
+| Realtime / privacy | Every client received every consultation (incl. farmer phone numbers); fake demo events reached doctor queues | Per-recipient filtering; demo event only to its target |
+| Realtime | `alerts:{userId}` events (verification / access / security) had no listener | Subscribed; verification/access alerts also refresh the profile so the doctor panel unlocks live |
+| Realtime | Doctor verify endpoint sent no notification | Sends a verification alert with reason |
+| Realtime | Stream URL hard-coded to `/api` (ignored `VITE_API_BASE_URL`); one failing handler stopped delivery to others | Uses the API base URL with credentials; handlers isolated |
+| API client | `withCsrfRetry` consumed 403 bodies so callers lost the error message; ~25 calls skipped CSRF retry and credentials; non-JSON error bodies crashed error handling | Peek via `clone()`; one `apiRequest` helper for all calls; safe error parsing |
+| Server | Unknown `/api/*` routes returned the SPA HTML with 200 | JSON 404 |
+| Server | 500 responses leaked internal error messages in production | Generic message in production |
+| Security | `DELETE /uploads/documents/:id` required no authentication | Attached documents: owner or admin only |
+| Account | "Change password" and "Two-factor auth" buttons did nothing | `POST /auth/change-password` (verified, rate limited, audit logged) + form; 2FA button replaced by an accurate lockout note |
+| Admin | "Consultation oversight" advertised but no UI | Admin Consultations panel (filter, priority, note, return to queue) |
+| Disease assistant | Voice input component existed but was unused and broken (mic left on, no errors handled) | Rewritten speech-to-text input wired into the chat |
+| Admin UI | `<button>` nested inside `<a>` (invalid HTML) | `Button asChild` |
+
+### Pass 3 — re-verification (all on the final code)
+| Check | Result |
+|---|---|
+| Strict type check | 0 errors |
+| `npm run build` | Pass |
+| `npm run test:consultations` | 14/14 checks pass |
+| `npm run test:actions` | Pass |
+| `npm run test:security` | Pass |
+| `node server/role-model-smoke-test.cjs` | Pass |
+| `node server/admin-panel-smoke-test.cjs` | Pass |
+| `npm run test:unit` | 9/9 pass |
+| Playwright UI + a11y (`tests/ui`) | 9/9 pass |
+
+### Mobile layout check (2026-11-07)
+Every farmer, doctor and admin page rendered at 320, 360 and 390px wide (Pixel 5 profile) against an isolated
+preview server with seeded consultations; measured sideways overflow and bottom-nav overflow, and reviewed screenshots.
+
+| Found | Fix |
+|---|---|
+| Farmer bottom nav 36px too wide at 320px (6 items; Profile cut off) | Equal-width items, truncating labels, active item no longer scales the whole link |
+| Help, RT Test, Detect and Live buttons stacked on top of content (covered the chat composer) | Help moved bottom-left on phones, Live pill desktop-only, RT Test only for admins/dev builds, extra mobile bottom padding |
+| Admin page scrolled sideways at 320px | Pie chart outside labels removed (legend shows % instead); long emails wrap |
+| Admin "Weekly Activity" chart used hard-coded numbers | Real data from `GET /api/admin/activity` |
+
+Result after fixes: 27/27 page × width combinations with no horizontal overflow; Playwright UI + a11y 9/9 pass;
+`test:consultations` 14/14.
+
+### Production readiness (2026-11-07)
+`npm run test:production` starts the real production server (`NODE_ENV=production`) in child processes with an
+isolated working directory:
+
+| Check | Result |
+|---|---|
+| Env check refuses missing `DATABASE_URL`, missing/weak bootstrap admin; accepts a complete config | Pass |
+| Demo passwords (`admin123` / `super123`) refused even when those accounts exist | Pass |
+| Bootstrap admin from env signs in with the admin role | Pass |
+| Spoofed `X-Forwarded-For` cannot bypass the sign-in rate limit | Pass |
+| Static server: malformed URL → 400 and server stays up; missing asset → 404; gzip; immutable / no-cache headers | Pass |
+| Headers: `Permissions-Policy` allows mic/geo for self; no HSTS over plain http | Pass |
+| Redeploy with a wiped disk keeps accounts and uploaded files (real PostgreSQL 16, disposable instance) | Pass |
+
+Dependency audit: `npm audit fix` (non-breaking) + vite 6.4.2 → 6.4.5: high/critical 15 → 0. After the upgrades:
+strict type check 0 errors, build, all server tests, unit 9/9, Playwright 9/9.
+
+### Known remaining limits (not changed)
+- Single-instance design: state is one JSON document mirrored to Postgres; run one instance (see RUNTIME_DEPLOYMENT_RENDER.md).
+- 16 moderate / 3 low advisories remain that need breaking (`--force`) upgrades.
+- Phone testing: `npm run dev:https` serves the dev server over HTTPS on the LAN (self-signed; one browser warning).
+  Verified at `https://192.168.0.103:5173` in a Pixel 5 profile: secure context true, Web Speech API present,
+  microphone and geolocation allowed by policy, realtime stream connects. Plain `npm run dev:lan` (http) cannot use the microphone.
+- Two-factor authentication is not implemented (shown honestly in Profile).
+- `GET /uploads/documents/:id` is unauthenticated; protection relies on unguessable random file ids.
+- Voice input depends on the browser Web Speech API (Chrome / Edge).
+
 ---
 
-Document version: 2.24
+Document version: 2.25
 Status: Active and maintained
-Last updated: 2026-04-16
+Last updated: 2026-11-07
 Owner: Miadul Islam Nizzan (Undergraduate, BSc in CSE, Green University of Bangladesh; Sole Developer)

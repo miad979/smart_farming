@@ -42,7 +42,7 @@ export const QuickGuide: React.FC = () => {
     return (
       <button
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-40 right-4 lg:bottom-24 lg:right-8 z-20 w-12 h-12 bg-primary text-primary-foreground rounded-full shadow-lg shadow-primary/20 hover:scale-105 hover:shadow-xl transition-all flex items-center justify-center"
+        className="fixed bottom-24 left-4 lg:left-auto lg:bottom-24 lg:right-8 z-20 w-12 h-12 bg-primary text-primary-foreground rounded-full shadow-lg shadow-primary/20 hover:scale-105 hover:shadow-xl transition-all flex items-center justify-center"
         aria-label={lang === 'bn' ? 'সাহায্য' : 'Help'}
       >
         <HelpCircle className="w-6 h-6" />

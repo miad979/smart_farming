@@ -5,6 +5,7 @@ import { User, Phone, MapPin, LogOut, LogIn, Globe, Smartphone, Cloud, Shield, B
 import { useLocation, useNavigate } from 'react-router';
 import { LoginModal } from '../components/LoginModal';
 import { ThemeToggle } from '../components/ThemeToggle';
+import { ChangePasswordForm } from '../components/ChangePasswordForm';
 
 export const Profile: React.FC = () => {
   const { state, logout, setLanguage, syncData } = useApp();
@@ -202,14 +203,21 @@ export const Profile: React.FC = () => {
             </div>
           </div>
           <div className="space-y-3">
-            <button className="w-full flex items-center justify-between px-4 py-3 bg-muted hover:bg-muted/80 rounded-xl transition-all">
-              <span className="text-sm font-medium">{lang === 'bn' ? 'পাসওয়ার্ড পরিবর্তন করুন' : 'Change password'}</span>
-              <Lock className="w-4 h-4 text-muted-foreground" />
-            </button>
-            <button className="w-full flex items-center justify-between px-4 py-3 bg-muted hover:bg-muted/80 rounded-xl transition-all">
-              <span className="text-sm font-medium">{lang === 'bn' ? 'দুই-ফ্যাক্টর প্রমাণীকরণ' : 'Two-factor auth'}</span>
-              <Shield className="w-4 h-4 text-muted-foreground" />
-            </button>
+            {isGuest || !state.accessToken ? (
+              <p className="text-sm text-muted-foreground px-1">
+                {lang === 'bn' ? 'নিরাপত্তা সেটিংসের জন্য লগইন করুন' : 'Sign in to manage security settings'}
+              </p>
+            ) : (
+              <ChangePasswordForm token={state.accessToken} lang={lang} />
+            )}
+            <div className="flex items-start justify-between gap-3 px-4 py-3 bg-muted/60 rounded-xl">
+              <span className="text-sm text-muted-foreground">
+                {lang === 'bn'
+                  ? 'বারবার ভুল পাসওয়ার্ড দিলে অ্যাকাউন্ট সাময়িকভাবে লক হয়ে যায়।'
+                  : 'Your account is temporarily locked after repeated failed sign-ins.'}
+              </span>
+              <Shield className="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
+            </div>
           </div>
         </div>
       </div>

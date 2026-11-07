@@ -9,6 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Farmer **My Consultations** page (`/consultations`): live status, farmer ↔ doctor chat, doctor advice, 1–5 star rating
+- Doctor dashboard: accept & chat, respond & complete, mark complete (advice required), real statistics and 7-day chart, real crop photos
+- Admin **Consultation oversight** panel: live list, filters, priority, admin note, return a case to the queue
+- `POST /api/auth/change-password` and a change-password form in Profile → Security
+- Voice questions (speech-to-text, বাংলা/English) in the disease assistant chat
+- Live account alerts (`alerts:{userId}`): doctor verification decisions now notify the doctor and unlock the panel without re-login
+- `npm run test:consultations` end-to-end workflow test (14 checks)
+- `npm run dev:lan` to open the dev server from a phone on the same Wi-Fi
+- `npm run dev:https`: local-network HTTPS dev server (self-signed via `@vitejs/plugin-basic-ssl`) so phones get a secure context for voice and GPS
+- Admin "Weekly Activity" chart now shows real detections and consultations (`GET /api/admin/activity`)
+
+### Fixed
+- Doctor advice was saved under a field the dashboard never displayed
+- Consultation requests ignored the chosen expert; "Call" dialed a placeholder number
+- `VoiceRecorder` component could not compile (missing declaration)
+- API client lost server error messages on 403 responses and crashed on non-JSON error bodies
+- ~25 API calls skipped CSRF retry and credentials; realtime stream ignored `VITE_API_BASE_URL`
+- Unknown `/api/*` routes returned the app HTML with status 200 (now JSON 404)
+- One failing realtime handler stopped delivery to all other handlers on that channel
+- Hook-order bug in the doctor dashboard when verification status changed
+- Mobile: farmer bottom navigation overflowed on phones (Profile cut off); floating Help / RT Test / Detect / Live buttons stacked over page content (incl. the chat composer); admin page scrolled sideways at 320px (pie labels, unbreakable emails)
+- Admin "Weekly Activity" chart displayed hard-coded sample numbers
+- "RT Test" developer panel was shown to farmers and doctors in production builds
+- Production server sent `Permissions-Policy: camera=(), microphone=(), geolocation=()` on the app page, which blocked voice questions and GPS weather; now `(self)` as documented in DEPLOYMENT.md / SECURITY.md
+
+- `npm run demo:free` failed at the build step on current Node (spawning `npm.cmd` without a shell is refused since Node 18.20 / 20.12); it now runs Vite directly
+
+- `npm run dev` hung forever when it had to start the local PostgreSQL (`ensure-local-postgres.cjs` captured pg_ctl output that the server keeps open on Windows); now starts in ~3 s
+
+### Deployment
+- Production refuses to start without `DATABASE_URL` (or an explicit `ALLOW_EPHEMERAL_STORAGE=true`) and without `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD`
+- Uploaded documents are stored in Postgres (`app_uploaded_files`) and restored after a redeploy wipes the disk
+- Graceful shutdown on `SIGTERM`: pending database writes are flushed; new single-process entry `server/start-production.cjs`
+- Production static server: gzip, immutable caching for hashed assets, `no-cache` index.html, 404 for missing assets, 400 (not a crash) for malformed URLs
+- `Dockerfile` / `.dockerignore` (multi-stage, non-root, health check) for any container host
+- Render deploys only after CI passes (`autoDeployTrigger: checksPass`); the hook workflow is now manual-only (no double, untested deploys)
+- Node 22 pinned (`.node-version`, CI); installs use `npm ci --ignore-scripts` (msedge-tts ships a pnpm-only preinstall guard)
+- `npm run test:production` (production-mode checks, optional Postgres redeploy test) runs in CI with a Postgres service
+
+### Security
+- Production no longer creates the public demo accounts (`admin123` / `super123`) and refuses those passwords at sign-in
+- Client IP for rate limits and lockout no longer trusts the client-supplied part of `X-Forwarded-For` (`TRUST_PROXY_HOPS`, `CLIENT_IP_HEADER`)
+- Dependency vulnerabilities fixed without breaking upgrades: 1 critical + 14 high → 0 high/critical (incl. react-router 7.18.5, vite 6.4.5, tar, ws, axios, dompurify)
+- Consultation realtime events are delivered only to users allowed to see the case (previously broadcast to every client, including farmer phone numbers)
+- Doctors can only change status/advice on their own or open cases (previously any field on any case)
+- `DELETE /api/uploads/documents/:id` now requires the owner or an admin for documents attached to an account
+- Production 500 responses no longer expose internal error messages
+- HSTS is no longer sent for localhost / private-network hosts (prevented pinning `localhost` to HTTPS for a year during local HTTPS dev)
+
 ### Planned
 - Real backend API integration
 - Actual AI disease detection model

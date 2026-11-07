@@ -350,7 +350,7 @@ add_header X-Content-Type-Options "nosniff" always;
 add_header X-Frame-Options "DENY" always;
 add_header X-XSS-Protection "1; mode=block" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-add_header Permissions-Policy "geolocation=(self), camera=(self)" always;
+add_header Permissions-Policy "camera=(self), microphone=(self), geolocation=(self)" always;
 ```
 
 ### Content Security Policy

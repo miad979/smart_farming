@@ -8,9 +8,13 @@
   "license": "PROPRIETARY",
   "scripts": {
     "dev": "node server/dev-start.cjs",
+    "dev:lan": "node server/dev-start.cjs --host",
+    "dev:https": "node server/dev-start.cjs --https",
     "build": "vite build",
     "test:security": "node server/security-tests.cjs",
     "test:actions": "node server/action-workflow-test.cjs",
+    "test:consultations": "node server/consultation-workflow-test.cjs",
+    "test:production": "node server/production-readiness-test.cjs",
     "test:load": "node server/load-test.cjs",
     "test:weather:live": "node server/validate-live-weather.cjs",
     "test:unit": "jest --runInBand",
@@ -22,7 +26,7 @@
     "repo:bootstrap": "node server/bootstrap-github-repo.cjs",
     "protect:ui-smoke": "node server/apply-branch-protection.cjs",
     "preview": "node server/preview-server.cjs",
-    "start:prod": "node server/check-production-env.cjs && node server/preview-server.cjs",
+    "start:prod": "node server/start-production.cjs",
     "secret:auth": "node server/generate-auth-secret.cjs",
     "demo:free": "node server/start-free-demo.cjs",
     "demo:free:skip-build": "node server/start-free-demo.cjs --skip-build",
@@ -99,10 +103,11 @@
     "@axe-core/playwright": "^4.10.2",
     "@playwright/test": "^1.59.1",
     "@tailwindcss/vite": "4.1.12",
+    "@vitejs/plugin-basic-ssl": "2.3.0",
     "@vitejs/plugin-react": "4.7.0",
     "jest": "^30.2.0",
     "tailwindcss": "4.1.12",
-    "vite": "6.4.2"
+    "vite": "6.4.5"
   },
   "jest": {
     "testEnvironment": "node",
@@ -132,9 +137,9 @@
   },
   "pnpm": {
     "overrides": {
-      "vite": "6.4.2",
-      "axios": "1.15.0",
-      "follow-redirects": "1.15.12"
+      "vite": "6.4.5",
+      "axios": "1.21.0",
+      "follow-redirects": "1.16.2"
     }
   },
   "keywords": [
@@ -151,7 +156,7 @@
     "pwa"
   ],
   "engines": {
-    "node": ">=18.0.0",
+    "node": ">=20.12.0",
     "npm": ">=9.0.0"
   },
   "repository": {

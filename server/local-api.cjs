@@ -319,6 +319,16 @@ async function initSqlMirror() {
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `)
+      // Uploaded documents (doctor certificates / resumes). Host disks are wiped on redeploy, so the
+      // file bytes are kept in the database too and restored to the local cache on demand.
+      await sqlPool.query(`
+        CREATE TABLE IF NOT EXISTS app_uploaded_files (
+          file_id TEXT PRIMARY KEY,
+          content_type TEXT NOT NULL,
+          data BYTEA NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `)
 
       sqlMirrorEnabled = true
       sqlMirrorLastError = null
@@ -357,7 +367,49 @@ async function writeSqlSnapshot(snapshotPayload) {
     return true
   } catch (error) {
     sqlMirrorLastError = error?.message || 'SQL snapshot write failed'
+    // Loud on purpose: on hosts with ephemeral disks this write is the only durable copy of the data.
+    console.error('[db] Failed to persist state snapshot to SQL:', sqlMirrorLastError)
     return false
+  }
+}
+
+async function storeUploadedFileInSql(fileId, contentType, buffer) {
+  const ready = await initSqlMirror()
+  if (!ready || !sqlPool) return false
+  try {
+    await sqlPool.query(
+      `INSERT INTO app_uploaded_files (file_id, content_type, data) VALUES ($1, $2, $3)
+       ON CONFLICT (file_id) DO UPDATE SET content_type = EXCLUDED.content_type, data = EXCLUDED.data`,
+      [fileId, contentType, buffer],
+    )
+    return true
+  } catch (error) {
+    sqlMirrorLastError = error?.message || 'SQL upload write failed'
+    console.error('[db] Failed to persist uploaded file to SQL:', sqlMirrorLastError)
+    return false
+  }
+}
+
+async function readUploadedFileFromSql(fileId) {
+  const ready = await initSqlMirror()
+  if (!ready || !sqlPool) return null
+  try {
+    const result = await sqlPool.query('SELECT content_type, data FROM app_uploaded_files WHERE file_id = $1 LIMIT 1', [fileId])
+    const row = result?.rows?.[0]
+    return row ? { contentType: row.content_type, data: row.data } : null
+  } catch (error) {
+    sqlMirrorLastError = error?.message || 'SQL upload read failed'
+    return null
+  }
+}
+
+async function deleteUploadedFileFromSql(fileId) {
+  const ready = await initSqlMirror()
+  if (!ready || !sqlPool) return
+  try {
+    await sqlPool.query('DELETE FROM app_uploaded_files WHERE file_id = $1', [fileId])
+  } catch (error) {
+    sqlMirrorLastError = error?.message || 'SQL upload delete failed'
   }
 }
 
@@ -406,9 +458,33 @@ function scheduleSqlSnapshotWrite(db) {
     clearTimeout(sqlMirrorWriteTimer)
   }
 
+  pendingSnapshotPayload = snapshotPayload
   sqlMirrorWriteTimer = setTimeout(() => {
+    sqlMirrorWriteTimer = null
+    pendingSnapshotPayload = null
     void writeSqlSnapshot(snapshotPayload)
   }, 150)
+}
+
+let pendingSnapshotPayload = null
+
+/**
+ * Graceful shutdown: write any debounced snapshot immediately and close the SQL pool.
+ * Hosts send SIGTERM on every redeploy/restart; without this the last <150 ms of writes could be lost.
+ */
+async function flushPendingWrites() {
+  if (sqlMirrorWriteTimer) {
+    clearTimeout(sqlMirrorWriteTimer)
+    sqlMirrorWriteTimer = null
+  }
+  const payload = pendingSnapshotPayload
+  pendingSnapshotPayload = null
+  if (payload) await writeSqlSnapshot(payload)
+  if (sqlPool) {
+    try { await sqlPool.end() } catch { /* already closed */ }
+    sqlPool = null
+    sqlInitPromise = null
+  }
 }
 
 function readJsonBody(req) {
@@ -1178,10 +1254,6 @@ function isSuperUser(user) {
   return user?.role === 'super_admin'
 }
 
-function isMainAdmin(user) {
-  return user?.email === 'admin@smartfarming.local'
-}
-
 function normalizeDeviceHelpLine(value) {
   const raw = String(value || '').trim()
   if (!raw) return ''
@@ -1918,6 +1990,45 @@ function saveDb(db) {
   scheduleSqlSnapshotWrite(db)
 }
 
+// Passwords of the development demo accounts. They are public (README), so any account still using one
+// is refused at sign-in in production.
+const DEMO_DEFAULT_PASSWORDS = ['admin123', 'super123']
+
+function hasDemoDefaultPassword(user) {
+  const stored = user?.metadata?.passwordHash
+  if (!stored) return false
+  return DEMO_DEFAULT_PASSWORDS.some((pw) => {
+    try { return verifyPassword(pw, stored) } catch { return false }
+  })
+}
+
+function seedBootstrapAdmin(db) {
+  const email = String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase()
+  const password = String(process.env.BOOTSTRAP_ADMIN_PASSWORD || '')
+  if (!email || !password) return
+  const existingId = db.usersByEmail[email]
+  if (existingId && db.users[existingId]) {
+    // Never overwrite a real password; only replace a leftover demo default.
+    const existing = db.users[existingId]
+    if (hasDemoDefaultPassword(existing)) {
+      existing.metadata = { ...(existing.metadata || {}), passwordHash: hashPassword(password), passwordChangedAt: nowIso() }
+    }
+    return
+  }
+  const adminId = id('user')
+  db.users[adminId] = {
+    id: adminId,
+    email,
+    name: String(process.env.BOOTSTRAP_ADMIN_NAME || 'Administrator').trim() || 'Administrator',
+    role: 'admin',
+    role_bn: roleBn('admin'),
+    verificationStatus: 'verified',
+    createdAt: nowIso(),
+    metadata: { passwordHash: hashPassword(password) },
+  }
+  db.usersByEmail[email] = adminId
+}
+
 function seedIfEmpty(db) {
   db.users ||= {}
   db.usersByEmail ||= {}
@@ -1943,9 +2054,15 @@ function seedIfEmpty(db) {
   db.login_security ||= {}
   db.app_settings ||= {}
 
-  // Default admin so the app is usable immediately.
+  // Production: the first admin comes from BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD (validated by
+  // server/check-production-env.cjs). The well-known demo accounts below are never created in production.
+  if (IS_PRODUCTION) {
+    seedBootstrapAdmin(db)
+  }
+
+  // Development / demo only: default admin so the app is usable immediately.
   const adminEmail = 'admin@smartfarming.local'
-  if (!db.usersByEmail[adminEmail]) {
+  if (!IS_PRODUCTION && !db.usersByEmail[adminEmail]) {
     const adminId = id('user')
     const user = {
       id: adminId,
@@ -1962,7 +2079,7 @@ function seedIfEmpty(db) {
   }
 
   const superUserEmail = 'super@smartfarming.local'
-  if (!db.usersByEmail[superUserEmail]) {
+  if (!IS_PRODUCTION && !db.usersByEmail[superUserEmail]) {
     const superUserId = id('user')
     const user = {
       id: superUserId,
@@ -2519,10 +2636,23 @@ function parseAccessToken(token) {
   }
 }
 
+// Client IP for rate limits and sign-in lockout. X-Forwarded-For is client-controlled except for the
+// entries appended by our own proxies, so only the entry TRUST_PROXY_HOPS positions from the right is
+// trusted (same idea as Express `trust proxy = N`). Default: 1 hop in production (one load balancer,
+// e.g. Render), 0 locally (use the socket address). CLIENT_IP_HEADER (e.g. cf-connecting-ip) can name a
+// header that a trusted edge proxy always overwrites.
+const TRUST_PROXY_HOPS = Math.max(0, Math.min(5, parseEnvInt('TRUST_PROXY_HOPS', IS_PRODUCTION ? 1 : 0, 0)))
+const CLIENT_IP_HEADER = String(process.env.CLIENT_IP_HEADER || '').trim().toLowerCase()
+
 function getClientIp(req) {
-  const xff = req.headers['x-forwarded-for']
-  if (typeof xff === 'string' && xff.trim()) {
-    return xff.split(',')[0].trim()
+  if (CLIENT_IP_HEADER) {
+    const value = req.headers[CLIENT_IP_HEADER]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  if (TRUST_PROXY_HOPS > 0) {
+    const xff = req.headers['x-forwarded-for']
+    const hops = (typeof xff === 'string' ? xff : '').split(',').map((s) => s.trim()).filter(Boolean)
+    if (hops.length >= TRUST_PROXY_HOPS) return hops[hops.length - TRUST_PROXY_HOPS]
   }
   return req.socket?.remoteAddress || 'unknown'
 }
@@ -2574,6 +2704,10 @@ function enforceRouteRateLimits(req, res, { method, pathname, ip }) {
     if (!applyRateLimit(res, `signin:${ip}`, 10 * 60 * 1000, RATE_LIMIT_SIGNIN_PER_10_MINUTES)) return false
   }
 
+  if (method === 'POST' && pathname === '/auth/change-password') {
+    if (!applyRateLimit(res, `change-password:${ip}`, 10 * 60 * 1000, RATE_LIMIT_SIGNIN_PER_10_MINUTES)) return false
+  }
+
   if (method === 'POST' && pathname === '/auth/signup') {
     if (!applyRateLimit(res, `signup:${ip}`, 10 * 60 * 1000, RATE_LIMIT_SIGNUP_PER_10_MINUTES)) return false
   }
@@ -2601,6 +2735,7 @@ function setSecurityHeaders(req, res) {
   res.setHeader('X-Content-Type-Options', 'nosniff')
   res.setHeader('X-Frame-Options', 'DENY')
   res.setHeader('Referrer-Policy', 'no-referrer')
+  // API responses are never documents that need device features, so they keep everything blocked.
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
@@ -2608,7 +2743,11 @@ function setSecurityHeaders(req, res) {
 
   const proto = req.headers['x-forwarded-proto']
   const isHttps = req.socket?.encrypted || (typeof proto === 'string' && proto.toLowerCase().includes('https'))
-  if (isHttps) {
+  // HSTS only for real domains: on localhost / LAN IPs (local HTTPS dev) it would pin the browser to https.
+  const host = String(req.headers.host || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '').toLowerCase()
+  const isLocalHost = host === 'localhost' || host.endsWith('.localhost') || host === '::1'
+    || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+  if (isHttps && !isLocalHost) {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
   }
 }
@@ -2639,6 +2778,74 @@ function emitRealtime(channel, data, userId) {
   for (const [, client] of realtimeClients) {
     if (userId && client.userId !== userId) continue
     writeSse(client.res, channel, data)
+  }
+}
+
+const CONSULTATION_STATUSES = ['pending', 'in-progress', 'completed']
+const CONSULTATION_MAX_TEXT = 2000
+const CONSULTATION_MAX_MESSAGES = 200
+
+function isConsultationManager(user) {
+  return Boolean(user && (user.role === 'admin' || user.role === 'super_admin'))
+}
+
+function isActiveDoctor(user) {
+  return Boolean(user && user.role === 'doctor' && (user.verificationStatus || 'verified') === 'verified')
+}
+
+// Who may see a consultation: the farmer who opened it, the doctor it is assigned to
+// (or requested from / open to while still pending), and admins.
+function canViewConsultation(user, consultation) {
+  if (!user || !consultation) return false
+  if (isConsultationManager(user)) return true
+  if (user.role === 'farmer') return consultation.farmerId === user.id
+  if (isActiveDoctor(user)) {
+    if (consultation.doctorId) return consultation.doctorId === user.id
+    if (consultation.status !== 'pending') return false
+    return !consultation.requestedDoctorId || consultation.requestedDoctorId === user.id
+  }
+  return false
+}
+
+function formatResponseDuration(fromIso, toIso) {
+  const ms = Math.max(0, new Date(toIso).getTime() - new Date(fromIso).getTime())
+  const mins = Math.max(1, Math.round(ms / 60000))
+  if (mins < 60) return { en: `${mins} min`, bn: `${mins} মিনিট` }
+  const hours = Math.round(mins / 60)
+  if (hours < 48) return { en: `${hours} hr`, bn: `${hours} ঘন্টা` }
+  const days = Math.round(hours / 24)
+  return { en: `${days} days`, bn: `${days} দিন` }
+}
+
+function appendConsultationMessage(consultation, sender, text) {
+  const messages = Array.isArray(consultation.messages) ? consultation.messages.slice(-(CONSULTATION_MAX_MESSAGES - 1)) : []
+  messages.push({
+    id: id('msg'),
+    senderId: sender.id,
+    senderName: sender.name,
+    senderRole: sender.role,
+    text,
+    createdAt: nowIso(),
+  })
+  return messages
+}
+
+// Push consultation changes only to users allowed to see them. Doctors/admins listen on
+// `consultations:all`; farmers listen on `consultations:<their id>`.
+function emitConsultationEvent(db, consultation, action, previous) {
+  for (const [, client] of realtimeClients) {
+    if (!client.userId) continue
+    const user = db.users[client.userId]
+    if (!user) continue
+    const channel = user.role === 'farmer' ? `consultations:${user.id}` : 'consultations:all'
+    const visibleNow = canViewConsultation(user, consultation)
+    const visibleBefore = previous ? canViewConsultation(user, previous) : false
+    if (visibleNow) {
+      writeSse(client.res, channel, { action, consultation })
+    } else if (visibleBefore) {
+      // e.g. another doctor claimed a pending case: drop it from this doctor's queue
+      writeSse(client.res, channel, { action: 'delete', consultationId: consultation.id })
+    }
   }
 }
 
@@ -3594,7 +3801,15 @@ function createLocalApiMiddleware() {
           return send(res, 400, { error: 'Invalid file path' })
         }
         if (!fs.existsSync(filePath)) {
-          return send(res, 404, { error: 'File not found' })
+          // Local disk may have been wiped by a redeploy: restore from the database copy if there is one.
+          const stored = await readUploadedFileFromSql(fileName)
+          if (!stored) return send(res, 404, { error: 'File not found' })
+          ensureUploadsDir()
+          try { fs.writeFileSync(filePath, stored.data) } catch { /* serve from memory below */ }
+          res.statusCode = 200
+          res.setHeader('Content-Type', stored.contentType || mimeFromExtension(path.extname(fileName).replace('.', '')))
+          res.end(stored.data)
+          return
         }
 
         const ext = path.extname(fileName).replace('.', '')
@@ -3669,6 +3884,7 @@ function createLocalApiMiddleware() {
         }
 
         fs.writeFileSync(destination, fileBuffer)
+        await storeUploadedFileInSql(storedName, contentTypeInput || mimeFromExtension(ext), fileBuffer)
 
         const uploadRecord = {
           id: storedName,
@@ -3700,11 +3916,27 @@ function createLocalApiMiddleware() {
           return send(res, 400, { error: 'Invalid file path' })
         }
 
+        // Ownership: a document attached to an account (or uploaded by a signed-in user) can only be
+        // removed by that user or an admin. Unattached drafts from the doctor application form, which
+        // happens before sign-up, stay removable so the applicant can replace a wrong file.
+        const authId = authUserIdFromReq(req)
+        const actor = authId ? db.users[authId] : null
+        const refersToFile = (value) => typeof value === 'string' && value.endsWith(`/uploads/documents/${fileName}`)
+        const attachedTo = Object.values(db.users || {}).find((u) => u && (
+          refersToFile(u.certificateDocument) || refersToFile(u.resumeDocument) || (u.verificationDocuments || []).some(refersToFile)
+        ))
+        const uploaderId = db.uploaded_documents?.[fileName]?.user_id || null
+        const ownerId = attachedTo?.id || uploaderId
+        if (ownerId && ownerId !== authId && !isAdminRole(actor?.role)) {
+          return send(res, 403, { error: 'You can only delete your own documents' })
+        }
+
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath)
         }
 
         removeUploadedDocument(db, fileName)
+        await deleteUploadedFileFromSql(fileName)
         saveDb(db)
 
         return send(res, 200, { ok: true, fileName })
@@ -3802,8 +4034,8 @@ function createLocalApiMiddleware() {
             status: 'pending',
             submittedAt: nowIso(),
           }
-          emitRealtime('consultations:all', { action: 'new', consultation })
-          emitRealtime(`consultations:${targetUserId}`, { action: 'new', consultation }, targetUserId)
+          // Demo event only notifies the target user; it is not persisted, so it must not reach doctor queues.
+          emitRealtime(`consultations:${targetUserId}`, { action: 'demo', consultation }, targetUserId)
         }
 
         if (type === 'irrigation') {
@@ -4117,6 +4349,15 @@ function createLocalApiMiddleware() {
           return send(res, 401, { error: 'Invalid email or password' })
         }
 
+        // The demo passwords are published in the README; never let them work on a live deployment.
+        if (IS_PRODUCTION && password && DEMO_DEFAULT_PASSWORDS.includes(password)) {
+          recordAuditLog(db, { actorId: userId, actorEmail: user.email, action: 'signin_blocked_default_password', targetUserId: userId, targetEmail: user.email })
+          saveDb(db)
+          return send(res, 403, {
+            error: 'This account still uses a public default password, which is disabled in production. An administrator must set BOOTSTRAP_ADMIN_PASSWORD or reset this account.',
+          })
+        }
+
         clearFailedSignin(db, normalizedEmail)
 
         user.lastSeen = nowIso()
@@ -4154,6 +4395,33 @@ function createLocalApiMiddleware() {
         return send(res, 200, { user: stripUserMetadata(user) })
       }
 
+      // AUTH: change own password (requires the current password)
+      if (method === 'POST' && pathname === '/auth/change-password') {
+        const userId = authUserIdFromReq(req)
+        if (!userId) return send(res, 401, { error: 'Unauthorized' })
+        const user = db.users[userId]
+        if (!user) return send(res, 404, { error: 'User not found' })
+
+        const { currentPassword, newPassword } = (await readJsonBody(req)) || {}
+        if (typeof currentPassword !== 'string' || typeof newPassword !== 'string' || !currentPassword || !newPassword) {
+          return send(res, 400, { error: 'Current and new password are required' })
+        }
+        if (!verifyPassword(currentPassword, user.metadata?.passwordHash)) {
+          recordAuditLog(db, { actorId: userId, actorEmail: user.email, action: 'password_change_failed', targetUserId: userId, targetEmail: user.email })
+          saveDb(db)
+          return send(res, 400, { error: 'Current password is incorrect' })
+        }
+        if (currentPassword === newPassword) return send(res, 400, { error: 'New password must be different from the current one' })
+        const pv = validatePasswordStrength(newPassword)
+        if (!pv.valid) return send(res, 400, { error: pv.error })
+
+        user.metadata = { ...(user.metadata || {}), passwordHash: hashPassword(newPassword), passwordChangedAt: nowIso() }
+        db.users[userId] = user
+        recordAuditLog(db, { actorId: userId, actorEmail: user.email, action: 'password_changed', targetUserId: userId, targetEmail: user.email })
+        saveDb(db)
+        return send(res, 200, { ok: true, message: 'Password updated' })
+      }
+
       // USERS: list (admin)
       if (method === 'GET' && pathname === '/users') {
         const authId = authUserIdFromReq(req)
@@ -4176,6 +4444,35 @@ function createLocalApiMiddleware() {
           .slice(0, 100)
 
         return send(res, 200, { logs })
+      }
+
+      // ADMIN: daily activity for the last 7 days (real disease detections and consultation requests)
+      if (method === 'GET' && pathname === '/admin/activity') {
+        const authId = authUserIdFromReq(req)
+        if (!authId) return send(res, 401, { error: 'Unauthorized' })
+        const current = db.users[authId]
+        if (!current || !isAdminRole(current.role)) return send(res, 403, { error: 'Admin access required' })
+
+        const tzOffsetMinutes = Math.max(-840, Math.min(840, Number(url.searchParams.get('tzOffset')) || 0))
+        const dayKey = (iso) => {
+          const t = Date.parse(iso || '')
+          if (!Number.isFinite(t)) return null
+          return new Date(t - tzOffsetMinutes * 60000).toISOString().slice(0, 10)
+        }
+        const days = []
+        for (let i = 6; i >= 0; i -= 1) {
+          days.push({ date: dayKey(new Date(Date.now() - i * 86400000).toISOString()), detections: 0, consultations: 0 })
+        }
+        const byDate = new Map(days.map((d) => [d.date, d]))
+        for (const record of Object.values(db.diseases || {})) {
+          const d = byDate.get(dayKey(record?.detectedAt || record?.createdAt))
+          if (d) d.detections += 1
+        }
+        for (const c of Object.values(db.consultations || {})) {
+          const d = byDate.get(dayKey(c?.submittedAt))
+          if (d) d.consultations += 1
+        }
+        return send(res, 200, { days })
       }
 
       // ADMIN: per-user sensor status overview
@@ -4515,6 +4812,14 @@ function createLocalApiMiddleware() {
             reason: reasonText || null,
           },
         })
+        const verificationMessages = {
+          verified: ['Your doctor account is verified. You can now answer farmer consultations.', 'আপনার ডাক্তার অ্যাকাউন্ট যাচাই হয়েছে। এখন কৃষকদের পরামর্শ দিতে পারবেন।'],
+          rejected: [`Your doctor verification was rejected.${reasonText ? ` Reason: ${reasonText}` : ''}`, `আপনার ডাক্তার ভেরিফিকেশন বাতিল হয়েছে।${reasonText ? ` কারণ: ${reasonText}` : ''}`],
+          suspended: [`Your doctor account has been suspended.${reasonText ? ` Reason: ${reasonText}` : ''}`, `আপনার ডাক্তার অ্যাকাউন্ট স্থগিত করা হয়েছে।${reasonText ? ` কারণ: ${reasonText}` : ''}`],
+          pending: ['Your doctor verification is back under review.', 'আপনার ডাক্তার ভেরিফিকেশন আবার পর্যালোচনায় আছে।'],
+        }
+        const [verificationMessage, verificationMessageBn] = verificationMessages[status]
+        pushUserAlert(db, doctorId, { type: 'verification', message: verificationMessage, message_bn: verificationMessageBn })
         saveDb(db)
 
         return send(res, 200, { doctor: stripUserMetadata(doctor), message: `Doctor ${status} successfully` })
@@ -4797,7 +5102,22 @@ function createLocalApiMiddleware() {
         if (!authId) return send(res, 401, { error: 'Unauthorized' })
         const farmer = db.users[authId]
         if (!farmer) return send(res, 404, { error: 'User not found' })
+        if (farmer.role !== 'farmer') return send(res, 403, { error: 'Only farmers can request consultations' })
         const body = await readJsonBody(req)
+
+        const disease = String(body.disease || '').trim().slice(0, 200)
+        const description = String(body.description || '').trim().slice(0, CONSULTATION_MAX_TEXT)
+        if (!disease && !description) return send(res, 400, { error: 'Disease or description is required' })
+
+        let requestedDoctor = null
+        if (typeof body.expertId === 'string' && body.expertId) {
+          requestedDoctor = db.users[body.expertId]
+          if (!isActiveDoctor(requestedDoctor)) return send(res, 400, { error: 'Selected expert is not available' })
+        }
+
+        const images = (Array.isArray(body.images) ? body.images : [])
+          .filter((img) => typeof img === 'string' && (img.startsWith('data:image/') || /^https?:\/\//.test(img)))
+          .slice(0, 3)
 
         const consultation = {
           id: id('consultation'),
@@ -4805,18 +5125,23 @@ function createLocalApiMiddleware() {
           farmerName: farmer.name,
           farmerEmail: farmer.email,
           farmerPhone: farmer.phone || farmer.email || '',
-          crop: body.crop,
-          crop_bn: body.crop_bn,
-          disease: body.disease,
-          disease_bn: body.disease_bn,
-          description: body.description,
-          description_en: body.description_en || body.description,
+          crop: String(body.crop || 'General Crop').slice(0, 100),
+          crop_bn: String(body.crop_bn || body.crop || 'সাধারণ ফসল').slice(0, 100),
+          disease,
+          disease_bn: String(body.disease_bn || disease).slice(0, 200),
+          description,
+          description_en: String(body.description_en || description).slice(0, CONSULTATION_MAX_TEXT),
           location: body.location || farmer.location || 'Unknown',
           location_bn: body.location_bn || farmer.location_bn || 'অজানা',
-          priority: body.priority || 'medium',
+          priority: ['low', 'medium', 'high'].includes(body.priority) ? body.priority : 'medium',
+          mode: body.mode === 'call' ? 'call' : 'chat',
+          requestedDoctorId: requestedDoctor ? requestedDoctor.id : null,
+          requestedDoctorName: requestedDoctor ? requestedDoctor.name : null,
           status: 'pending',
-          images: body.images || [],
+          images,
+          messages: [],
           submittedAt: nowIso(),
+          updatedAt: nowIso(),
         }
 
         db.consultations[consultation.id] = consultation
@@ -4824,10 +5149,62 @@ function createLocalApiMiddleware() {
         db.consultationsByFarmer[authId].push(consultation.id)
         saveDb(db)
 
-        emitRealtime('consultations:all', { action: 'new', consultation })
-        emitRealtime(`consultations:${authId}`, { action: 'new', consultation }, authId)
+        emitConsultationEvent(db, consultation, 'new')
 
         return send(res, 200, { consultation, message: 'Consultation created' })
+      }
+
+      // CONSULTATIONS: chat message (farmer owner or assigned doctor; a doctor's first reply claims a pending case)
+      const consultationMessageMatch = pathname.match(/^\/consultations\/([^/]+)\/messages$/)
+      if (method === 'POST' && consultationMessageMatch) {
+        const authId = authUserIdFromReq(req)
+        if (!authId) return send(res, 401, { error: 'Unauthorized' })
+        const current = db.users[authId]
+        const existing = db.consultations[consultationMessageMatch[1]]
+        if (!existing || !canViewConsultation(current, existing)) return send(res, 404, { error: 'Consultation not found' })
+        if (isConsultationManager(current)) return send(res, 403, { error: 'Only the farmer and assigned doctor can chat' })
+        if (existing.status === 'completed') return send(res, 409, { error: 'Consultation is already completed' })
+
+        const body = await readJsonBody(req)
+        const text = String(body.text || '').trim().slice(0, CONSULTATION_MAX_TEXT)
+        if (!text) return send(res, 400, { error: 'Message text is required' })
+
+        const updated = { ...existing, messages: appendConsultationMessage(existing, current, text), updatedAt: nowIso() }
+        if (current.role === 'doctor' && !existing.doctorId) {
+          Object.assign(updated, {
+            doctorId: authId,
+            doctorName: current.name,
+            doctorSpecialty: current.specialty || 'Agricultural Specialist',
+            status: 'in-progress',
+            acceptedAt: nowIso(),
+          })
+        }
+
+        db.consultations[existing.id] = updated
+        saveDb(db)
+        emitConsultationEvent(db, updated, 'update', existing)
+        return send(res, 200, { consultation: updated })
+      }
+
+      // CONSULTATIONS: farmer rating/feedback after completion
+      const consultationRatingMatch = pathname.match(/^\/consultations\/([^/]+)\/rating$/)
+      if (method === 'POST' && consultationRatingMatch) {
+        const authId = authUserIdFromReq(req)
+        if (!authId) return send(res, 401, { error: 'Unauthorized' })
+        const existing = db.consultations[consultationRatingMatch[1]]
+        if (!existing || existing.farmerId !== authId) return send(res, 404, { error: 'Consultation not found' })
+        if (existing.status !== 'completed') return send(res, 409, { error: 'Only completed consultations can be rated' })
+
+        const body = await readJsonBody(req)
+        const rating = Math.round(Number(body.rating))
+        if (!(rating >= 1 && rating <= 5)) return send(res, 400, { error: 'Rating must be between 1 and 5' })
+        const feedback = String(body.feedback || '').trim().slice(0, 1000)
+
+        const updated = { ...existing, rating, feedback, feedback_en: feedback, ratedAt: nowIso(), updatedAt: nowIso() }
+        db.consultations[existing.id] = updated
+        saveDb(db)
+        emitConsultationEvent(db, updated, 'update', existing)
+        return send(res, 200, { consultation: updated })
       }
 
       // CONSULTATIONS: list (role-based)
@@ -4841,12 +5218,8 @@ function createLocalApiMiddleware() {
         if (current.role === 'farmer') {
           const ids = db.consultationsByFarmer[authId] || []
           consultations = ids.map((cid) => db.consultations[cid]).filter(Boolean)
-        } else if (current.role === 'doctor') {
-          consultations = Object.values(db.consultations).filter(
-            (c) => c && (c.status === 'pending' || c.doctorId === authId),
-          )
         } else {
-          consultations = Object.values(db.consultations)
+          consultations = Object.values(db.consultations).filter((c) => canViewConsultation(current, c))
         }
 
         consultations.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime())
@@ -4858,31 +5231,53 @@ function createLocalApiMiddleware() {
         const authId = authUserIdFromReq(req)
         if (!authId) return send(res, 401, { error: 'Unauthorized' })
         const current = db.users[authId]
-        const canManageConsultation = Boolean(current && (current.role === 'doctor' || current.role === 'admin' || current.role === 'super_admin'))
+        const canManageConsultation = isActiveDoctor(current) || isConsultationManager(current)
         if (!canManageConsultation) return send(res, 403, { error: 'Consultation manager access required' })
 
         const consultationId = pathname.split('/').pop()
         const existing = consultationId ? db.consultations[consultationId] : null
-        if (!existing) return send(res, 404, { error: 'Consultation not found' })
+        if (!existing || !canViewConsultation(current, existing)) return send(res, 404, { error: 'Consultation not found' })
 
         const updates = await readJsonBody(req)
+        if (updates?.status !== undefined && !CONSULTATION_STATUSES.includes(updates.status)) {
+          return send(res, 400, { error: 'Invalid consultation status' })
+        }
         let updated = { ...existing }
 
         if (current.role === 'doctor') {
+          // Only whitelisted fields; a doctor can never rewrite farmer data or another doctor's case.
+          const responseText = typeof updates?.response === 'string' ? updates.response.trim().slice(0, CONSULTATION_MAX_TEXT) : ''
+          const nextStatus = updates?.status || (responseText ? 'completed' : 'in-progress')
+          if (nextStatus === 'pending') return send(res, 400, { error: 'Doctors cannot move a case back to pending' })
+          if (nextStatus === 'completed' && !responseText && !existing.doctorResponse) {
+            return send(res, 400, { error: 'Write your advice before completing the consultation' })
+          }
+          const now = nowIso()
           updated = {
             ...existing,
-            ...updates,
             doctorId: authId,
             doctorName: current.name,
             doctorSpecialty: current.specialty || 'Agricultural Specialist',
             doctorRegistrationNumber: current.registrationNumber || '',
             doctorExperienceYears: Number(current.experienceYears || 0),
-            doctorProfileSummary: current.profileSummary || '',
-            doctorCertificateDocument: current.certificateDocument || '',
-            doctorResumeDocument: current.resumeDocument || '',
             doctorVerificationStatus: current.verificationStatus || 'verified',
-            status: updates.status || 'in-progress',
+            status: nextStatus,
+            acceptedAt: existing.acceptedAt || now,
+            updatedAt: now,
           }
+          if (responseText) {
+            const duration = formatResponseDuration(existing.submittedAt, now)
+            Object.assign(updated, {
+              response: responseText,
+              doctorResponse: responseText,
+              doctorResponse_en: responseText,
+              respondedAt: now,
+              responseTime: existing.responseTime || duration.en,
+              responseTime_bn: existing.responseTime_bn || duration.bn,
+              messages: appendConsultationMessage(existing, current, responseText),
+            })
+          }
+          if (nextStatus === 'completed') updated.completedAt = now
         } else {
           const nextStatus = typeof updates?.status === 'string' ? updates.status : existing.status
           const nextPriority = typeof updates?.priority === 'string' ? updates.priority : existing.priority
@@ -4898,15 +5293,19 @@ function createLocalApiMiddleware() {
             reviewedAt: nowIso(),
             reviewedBy: current.email || current.name || authId,
             reviewedByRole: current.role,
+            updatedAt: nowIso(),
+          }
+          // Returning a case to the queue releases the assigned doctor so any verified doctor can pick it up.
+          if (nextStatus === 'pending' && existing.status !== 'pending') {
+            updated.doctorId = null
+            updated.doctorName = null
+            updated.acceptedAt = null
           }
         }
 
         db.consultations[consultationId] = updated
         saveDb(db)
-        emitRealtime('consultations:all', { action: 'update', consultation: updated })
-        if (updated.farmerId) {
-          emitRealtime(`consultations:${updated.farmerId}`, { action: 'update', consultation: updated }, updated.farmerId)
-        }
+        emitConsultationEvent(db, updated, 'update', existing)
         return send(res, 200, { consultation: updated, message: 'Consultation updated' })
       }
 
@@ -5337,7 +5736,9 @@ function createLocalApiMiddleware() {
         return send(res, 200, { devices })
       }
 
-      return next()
+      // This middleware is only mounted under /api, so an unmatched route is an API 404.
+      // (Falling through to the SPA would answer with index.html and a misleading 200.)
+      return send(res, 404, { error: `Unknown API route: ${method} ${pathname}` })
     } catch (err) {
       console.error('Unhandled local API middleware error', err)
       if (!res.headersSent && !res.writableEnded) {
@@ -5347,7 +5748,8 @@ function createLocalApiMiddleware() {
         if (err?.message === 'Request body too large') {
           return send(res, 413, { error: 'Request body too large' })
         }
-        return send(res, 500, { error: err?.message || 'Internal server error' })
+        // Don't leak internal error details to clients in production.
+        return send(res, 500, { error: IS_PRODUCTION ? 'Internal server error' : (err?.message || 'Internal server error') })
       }
 
       if (!res.writableEnded) {
@@ -5363,5 +5765,5 @@ function createLocalApiMiddleware() {
   }
 }
 
-module.exports = { createLocalApiMiddleware }
+module.exports = { createLocalApiMiddleware, flushPendingWrites }
 

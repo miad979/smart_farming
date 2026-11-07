@@ -17,6 +17,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../components/ui/alert-dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Link } from 'react-router';
+import { AdminConsultationsPanel } from '../components/AdminConsultationsPanel';
 
 export const AdminDashboard: React.FC = () => {
   const { state } = useApp();
@@ -40,6 +41,20 @@ export const AdminDashboard: React.FC = () => {
   const [systemHealth, setSystemHealth] = useState<any | null>(null);
   const [isHealthLoading, setIsHealthLoading] = useState(false);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [activityDays, setActivityDays] = useState<api.AdminActivityDay[]>([]);
+
+  useEffect(() => {
+    if (!state.accessToken) return;
+    let cancelled = false;
+    const load = () => {
+      api.getAdminActivity(state.accessToken as string)
+        .then(({ days }) => { if (!cancelled) setActivityDays(days || []); })
+        .catch(() => { if (!cancelled) setActivityDays([]); });
+    };
+    load();
+    const timer = setInterval(load, 60000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [state.accessToken]);
   const [sensorStatuses, setSensorStatuses] = useState<any[]>([]);
   const [isSensorStatusLoading, setIsSensorStatusLoading] = useState(false);
   const [sensorStatusError, setSensorStatusError] = useState<string | null>(null);
@@ -459,18 +474,19 @@ export const AdminDashboard: React.FC = () => {
     { id: 'super_users', name: lang === 'bn' ? 'সুপার ইউজার' : 'Super Users', value: stats.totalSuperUsers, color: '#ef4444' },
   ];
 
+  const roleTotal = usersByRole.reduce((sum, entry) => sum + (Number(entry.value) || 0), 0);
   const usersByRoleChartData = usersByRole.filter((entry) => entry.value > 0);
   const hasRoleChartData = usersByRoleChartData.length > 0;
 
-  const weeklyActivity = [
-    { day: lang === 'bn' ? 'সোম' : 'Mon', detections: 245, queries: 89 },
-    { day: lang === 'bn' ? 'মঙ্গল' : 'Tue', detections: 312, queries: 102 },
-    { day: lang === 'bn' ? 'বুধ' : 'Wed', detections: 289, queries: 95 },
-    { day: lang === 'bn' ? 'বৃহস্পতি' : 'Thu', detections: 356, queries: 118 },
-    { day: lang === 'bn' ? 'শুক্র' : 'Fri', detections: 298, queries: 87 },
-    { day: lang === 'bn' ? 'শনি' : 'Sat', detections: 178, queries: 56 },
-    { day: lang === 'bn' ? 'রবি' : 'Sun', detections: 145, queries: 43 },
-  ];
+  // Real activity for the last 7 days (oldest first), from GET /api/admin/activity.
+  const WEEKDAY_LABELS = lang === 'bn'
+    ? ['রবি', 'সোম', 'মঙ্গল', 'বুধ', 'বৃহস্পতি', 'শুক্র', 'শনি']
+    : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const weeklyActivity = activityDays.map((d) => ({
+    day: WEEKDAY_LABELS[new Date(`${d.date}T12:00:00`).getDay()],
+    detections: d.detections,
+    queries: d.consultations,
+  }));
 
   const detailLocation = selectedUser
     ? (lang === 'bn'
@@ -664,9 +680,9 @@ export const AdminDashboard: React.FC = () => {
                     const canAdjust = canManageUser(user);
                     return (
                       <div key={user.id} className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 p-3 border rounded-lg">
-                        <div>
-                          <p className="font-medium">{user.name}</p>
-                            <p className="text-sm text-muted-foreground">{user.email}</p>
+                        <div className="min-w-0">
+                          <p className="font-medium break-words">{user.name}</p>
+                            <p className="text-sm text-muted-foreground break-all">{user.email}</p>
                               <p className="text-xs text-muted-foreground">{lang === 'bn' ? 'ভূমিকা:' : 'Role:'} {getRoleLabel(user.role, user.role_bn)}</p>
                         </div>
                         <div className="flex flex-wrap gap-2">
@@ -938,10 +954,10 @@ export const AdminDashboard: React.FC = () => {
               <LineChart data={weeklyActivity}>
                 <CartesianGrid strokeDasharray="3 3" key="grid" />
                 <XAxis dataKey="day" key="xaxis" />
-                <YAxis key="yaxis" />
+                <YAxis key="yaxis" allowDecimals={false} width={32} />
                 <Tooltip key="tooltip" />
                 <Line type="monotone" dataKey="detections" stroke="#10b981" strokeWidth={2} name={lang === 'bn' ? 'শনাক্তকরণ' : 'Detections'} key="line-detections" />
-                <Line type="monotone" dataKey="queries" stroke="#3b82f6" strokeWidth={2} name={lang === 'bn' ? 'প্রশ্ন' : 'Queries'} key="line-queries" />
+                <Line type="monotone" dataKey="queries" stroke="#3b82f6" strokeWidth={2} name={lang === 'bn' ? 'পরামর্শ অনুরোধ' : 'Consultations'} key="line-queries" />
               </LineChart>
             </ResponsiveContainer>
           </CardContent>
@@ -963,7 +979,6 @@ export const AdminDashboard: React.FC = () => {
                     cx="50%"
                     cy="50%"
                     labelLine={false}
-                    label={({ name, percent }) => `${name} ${Math.round((Number(percent) || 0) * 100)}%`}
                     outerRadius={80}
                     fill="#8884d8"
                     dataKey="value"
@@ -990,7 +1005,12 @@ export const AdminDashboard: React.FC = () => {
                     <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: entry.color }} />
                     <span className="text-muted-foreground">{entry.name}</span>
                   </div>
-                  <span className="font-semibold">{entry.value}</span>
+                  <span className="font-semibold">
+                    {entry.value}
+                    {roleTotal > 0 && (
+                      <span className="ml-1 font-normal text-muted-foreground">({Math.round((entry.value / roleTotal) * 100)}%)</span>
+                    )}
+                  </span>
                 </div>
               ))}
             </div>
@@ -1420,9 +1440,9 @@ export const AdminDashboard: React.FC = () => {
           <div className="space-y-3">
             {recentUsers.map((user) => (
               <div key={user.id} className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 p-3 border rounded-lg">
-                <div>
-                  <p className="font-medium">{user.name}</p>
-                  <p className="text-sm text-muted-foreground">{user.email}</p>
+                <div className="min-w-0">
+                  <p className="font-medium break-words">{user.name}</p>
+                  <p className="text-sm text-muted-foreground break-all">{user.email}</p>
                 </div>
                 <div className="text-sm text-muted-foreground">
                   <p>{lang === 'bn' ? 'তৈরি:' : 'Created:'} {formatDate(user.createdAt)}</p>
@@ -1441,12 +1461,12 @@ export const AdminDashboard: React.FC = () => {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-base">{t('pendingDoctors', lang)}</CardTitle>
-          <Link to="/admin/doctor-verification">
-            <Button size="sm">
+          <Button size="sm" asChild>
+            <Link to="/admin/doctor-verification">
               <Eye className="w-4 h-4 mr-2" />
               {lang === 'bn' ? 'সব দেখুন' : 'View All'}
-            </Button>
-          </Link>
+            </Link>
+          </Button>
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
@@ -1469,6 +1489,8 @@ export const AdminDashboard: React.FC = () => {
           </div>
         </CardContent>
       </Card>
+
+      <AdminConsultationsPanel lang={lang} />
     </div>
   );
 };

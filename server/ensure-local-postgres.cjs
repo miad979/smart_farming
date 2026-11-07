@@ -153,8 +153,17 @@ function main() {
     return
   }
 
-  const startResult = runCommand(pgCtl, ['-D', dataDir, '-l', logFile, '-o', `-p ${pgPort}`, 'start'])
-  printOutput('[db]', startResult)
+  // Do not capture pg_ctl's output: the postgres server it launches inherits those pipes and keeps them open,
+  // so a captured spawnSync never returns (npm run dev would hang). Server output goes to the log file;
+  // `-w` makes pg_ctl wait until the server accepts connections (or fails) before exiting.
+  console.log(`[db] Starting local PostgreSQL on 127.0.0.1:${pgPort} (log: ${logFile})`)
+  const startResult = spawnSync(pgCtl, ['-D', dataDir, '-l', logFile, '-o', `-p ${pgPort}`, '-w', '-t', '30', 'start'], {
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  if (startResult.error || startResult.status !== 0) {
+    console.log(`[db] pg_ctl start exited with ${startResult.error ? startResult.error.message : `code ${startResult.status}`}; see ${logFile}`)
+  }
 
   const readyAfter = runCommand(pgIsReady, ['-h', '127.0.0.1', '-p', pgPort, '-U', pgUser])
   const readyAfterText = `${readyAfter.stdout || ''}${readyAfter.stderr || ''}`
