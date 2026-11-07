@@ -357,6 +357,8 @@ async function run() {
     db.uploads[orphan.json.file.id].uploadedAt = old;
     db.uploads[kept.json.file.id].uploadedAt = old;
     fs.writeFileSync(dbFile, JSON.stringify(db));
+    const later = new Date(Date.now() + 2000);
+    fs.utimesSync(dbFile, later, later); // make sure the server sees the outside edit (same-millisecond mtime otherwise)
     await wait(20);
 
     const removed = await runUploadCleanupOnce();
