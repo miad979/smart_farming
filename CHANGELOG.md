@@ -17,11 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Voice questions (speech-to-text, বাংলা/English) in the disease assistant chat
 - Live account alerts (`alerts:{userId}`): doctor verification decisions now notify the doctor and unlock the panel without re-login
 - `npm run test:consultations` end-to-end workflow test (14 checks)
+- `npm run test:weather`: live weather workflow test with simulated providers (7 checks, runs in CI)
+- Optional `WEATHER_PROVIDERS` env var to set the weather provider order (default `open-meteo,met-norway`)
+- Weather widget: "Use my location" and "Try again" buttons
 - `npm run dev:lan` to open the dev server from a phone on the same Wi-Fi
 - `npm run dev:https`: local-network HTTPS dev server (self-signed via `@vitejs/plugin-basic-ssl`) so phones get a secure context for voice and GPS
 - Admin "Weekly Activity" chart now shows real detections and consultations (`GET /api/admin/activity`)
 
 ### Fixed
+- Live weather returned HTTP 500 on the deployed server: requests now time out after 8 s, Open-Meteo is retried once on transient errors, MET Norway is used as a fallback, a recent cached forecast is served if every provider fails, and otherwise a clear 503 is returned instead of a crash
+- Hourly rain forecast window was computed in server UTC instead of the farm's local time zone
+- Place names used a non-existent geocoding endpoint (now OpenStreetMap Nominatim, cached 24 h)
+- GPS jitter triggered repeated weather reloads (coordinates rounded to ~1 km; simultaneous requests share one provider call)
+- Yield advice failed entirely when weather was unavailable
 - Doctor advice was saved under a field the dashboard never displayed
 - Consultation requests ignored the chosen expert; "Call" dialed a placeholder number
 - `VoiceRecorder` component could not compile (missing declaration)

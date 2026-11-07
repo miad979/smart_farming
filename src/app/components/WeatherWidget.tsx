@@ -2,8 +2,12 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { t } from '../utils/translations';
 import { getCurrentWeatherData } from '../utils/api';
-import { getLastKnownLocation } from '../utils/helpers';
-import { Cloud, Droplets, Wind, AlertTriangle, Loader2, CloudRain, Zap } from 'lucide-react';
+import { getCurrentLocation, getLastKnownLocation } from '../utils/helpers';
+import { Cloud, Droplets, Wind, AlertTriangle, Loader2, CloudRain, Zap, MapPin, RefreshCw } from 'lucide-react';
+
+// Weather does not change within ~1 km, so GPS jitter must not trigger a reload (each one used to reach the
+// weather provider and contributed to rate limiting).
+const MIN_MOVE_FOR_RELOAD_DEG = 0.01;
 
 interface HourlyRain {
   hour: number;
@@ -149,6 +153,10 @@ export const WeatherWidget: React.FC = () => {
   const [nowTick, setNowTick] = useState(Date.now());
   const coordsRef = useRef<{ lat: number; lng: number } | null>(null);
   const fallbackModeRef = useRef(false);
+  const loadWeatherRef = useRef<(coords?: { lat: number; lng: number }) => Promise<void>>(async () => {});
+  const [usingFallbackLocation, setUsingFallbackLocation] = useState(false);
+  const [locating, setLocating] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -188,8 +196,10 @@ export const WeatherWidget: React.FC = () => {
       }
     };
 
+    loadWeatherRef.current = loadWeather;
     coordsRef.current = getLastKnownLocation();
     fallbackModeRef.current = !coordsRef.current;
+    setUsingFallbackLocation(fallbackModeRef.current);
     loadWeather(coordsRef.current || undefined);
     const interval = setInterval(() => loadWeather(coordsRef.current || undefined), refreshIntervalMs);
 
@@ -208,6 +218,7 @@ export const WeatherWidget: React.FC = () => {
 
       if (permissionState !== 'granted') {
         fallbackModeRef.current = !coordsRef.current;
+        if (mounted) setUsingFallbackLocation(fallbackModeRef.current);
         if (mounted && fallbackModeRef.current) {
           setWeatherError(fallbackMessage);
         }
@@ -217,15 +228,16 @@ export const WeatherWidget: React.FC = () => {
       watchId = navigator.geolocation.watchPosition(
         (position) => {
           if (!mounted) return;
+          const next = { lat: position.coords.latitude, lng: position.coords.longitude };
+          const previous = coordsRef.current;
+          const wasFallback = fallbackModeRef.current;
           fallbackModeRef.current = false;
-          coordsRef.current = {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-          };
-          loadWeather({
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-          });
+          setUsingFallbackLocation(false);
+          coordsRef.current = next;
+          const moved = !previous
+            || Math.abs(previous.lat - next.lat) >= MIN_MOVE_FOR_RELOAD_DEG
+            || Math.abs(previous.lng - next.lng) >= MIN_MOVE_FOR_RELOAD_DEG;
+          if (wasFallback || moved) loadWeather(next);
         },
         () => {
           // Keep interval refresh using cached/fallback coordinates.
@@ -254,6 +266,47 @@ export const WeatherWidget: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
+  // Ask for the farmer's location (browser permission prompt) instead of silently showing Dhaka weather.
+  const useMyLocation = async () => {
+    setLocating(true);
+    try {
+      const coords = await getCurrentLocation();
+      fallbackModeRef.current = false;
+      setUsingFallbackLocation(false);
+      coordsRef.current = coords;
+      await loadWeatherRef.current(coords);
+    } catch (error: any) {
+      setWeatherError(
+        lang === 'bn'
+          ? 'আপনার লোকেশন পাওয়া যায়নি। ব্রাউজারে এই সাইটের জন্য লোকেশন অনুমতি দিন।'
+          : `Could not get your location (${error?.message || 'permission denied'}). Allow location access for this site in your browser.`,
+      );
+    } finally {
+      setLocating(false);
+    }
+  };
+
+  const retryWeather = async () => {
+    setRetrying(true);
+    try {
+      await loadWeatherRef.current(coordsRef.current || undefined);
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  const locationButton = (
+    <button
+      type="button"
+      onClick={() => void useMyLocation()}
+      disabled={locating}
+      className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60"
+    >
+      {locating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MapPin className="h-3.5 w-3.5" />}
+      {lang === 'bn' ? 'আমার লোকেশন ব্যবহার করুন' : 'Use my location'}
+    </button>
+  );
+
   if (loading && !weather) {
     return (
       <div className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-sm backdrop-blur-md flex items-center gap-3">
@@ -269,6 +322,18 @@ export const WeatherWidget: React.FC = () => {
         <p className="text-sm text-destructive">
           {weatherError || (lang === 'bn' ? 'লাইভ আবহাওয়া পাওয়া যায়নি' : 'Could not load live weather')}
         </p>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => void retryWeather()}
+            disabled={retrying}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted disabled:opacity-60"
+          >
+            {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            {lang === 'bn' ? 'আবার চেষ্টা করুন' : 'Try again'}
+          </button>
+          {usingFallbackLocation && locationButton}
+        </div>
       </div>
     );
   }
@@ -322,7 +387,10 @@ export const WeatherWidget: React.FC = () => {
         {weatherError && (
           <div className="mb-4 flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800 shadow-sm">
             <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-            <p className="text-xs leading-5">{weatherError}</p>
+            <div>
+              <p className="text-xs leading-5">{weatherError}</p>
+              {usingFallbackLocation && locationButton}
+            </div>
           </div>
         )}
 
@@ -408,11 +476,11 @@ export const WeatherWidget: React.FC = () => {
             </div>
             <div className="rounded-lg border border-border/50 p-2">
               <p className="text-muted-foreground">{lang === 'bn' ? 'দৃশ্যমানতা' : 'Visibility'}</p>
-              <p className="font-semibold">{weather.current.visibilityKm ?? 0} km</p>
+              <p className="font-semibold">{typeof weather.current.visibilityKm === 'number' ? `${weather.current.visibilityKm} km` : '—'}</p>
             </div>
             <div className="rounded-lg border border-border/50 p-2">
               <p className="text-muted-foreground">{lang === 'bn' ? 'ডিউ পয়েন্ট' : 'Dew point'}</p>
-              <p className="font-semibold">{weather.current.dewPoint ?? 0}°C</p>
+              <p className="font-semibold">{typeof weather.current.dewPoint === 'number' ? `${weather.current.dewPoint}°C` : '—'}</p>
             </div>
             <div className="rounded-lg border border-border/50 p-2">
               <p className="text-muted-foreground">{lang === 'bn' ? 'উৎস' : 'Source'}</p>

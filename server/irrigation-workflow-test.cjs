@@ -99,6 +99,8 @@ async function run() {
     const db = JSON.parse(fs.readFileSync(dbFile, 'utf8'))
     db.devices[deviceId].pumpRunEndsAt = new Date(Date.now() - 1000).toISOString() // run already over
     fs.writeFileSync(dbFile, JSON.stringify(db))
+    const later = new Date(Date.now() + 2000)
+    fs.utimesSync(dbFile, later, later) // make sure the server sees the outside edit (same-millisecond mtime otherwise)
     await wait(20)
     const devices = (await request('GET', '/devices')).json.devices
     assert(devices[0].actuatorState === 'idle' && !devices[0].pumpRunEndsAt, `Pump should be idle, got ${devices[0].actuatorState}`)
