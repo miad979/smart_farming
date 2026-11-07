@@ -137,6 +137,22 @@ async function run() {
     }
   })
 
+  await step('yield estimate: crop-specific baseline, crop threshold, no invented moisture', async () => {
+    const noSensor = await get('/yield/advice?lat=24.85&lng=89.37&crop=Rice')
+    assert(noSensor.status === 200 && noSensor.json.advice.basedOn.moisture === null, 'Missing moisture must not be assumed')
+    assert(/sensor/i.test(noSensor.json.advice.advice_en[0]), 'Should ask to connect a sensor')
+    assert(noSensor.json.advice.baselineYieldTonsPerAcre === 1.9, 'Rice baseline should be 1.9 t/acre')
+    const wheat = await get('/yield/advice?lat=24.85&lng=89.37&crop=Wheat&moisture=60')
+    assert(wheat.json.advice.crop_bn === 'গম' && wheat.json.advice.baselineYieldTonsPerAcre === 1.4, 'Wheat baseline / Bangla name wrong')
+    // Only the (simulated, rainy) weather penalty applies to both: 60% is enough for wheat, 70% for rice.
+    const wetRice = await get('/yield/advice?lat=24.85&lng=89.37&crop=Rice&moisture=70')
+    assert(wheat.json.advice.deltaPercent === wetRice.json.advice.deltaPercent, `60% should be fine for wheat (threshold 55): ${wheat.json.advice.deltaPercent}% vs ${wetRice.json.advice.deltaPercent}%`)
+    const dryRice = await get('/yield/advice?lat=24.85&lng=89.37&crop=Rice&moisture=60')
+    assert(dryRice.json.advice.deltaPercent < 0 && /below the 65%/.test(dryRice.json.advice.advice_en[0]), '60% is too dry for rice (threshold 65)')
+    const bad = await get('/yield/advice?lat=24.85&lng=89.37&moisture=150')
+    assert(bad.status === 400, `Moisture 150% should be rejected, got ${bad.status}`)
+  })
+
   server.close()
   console.log(`\nWeather workflow: ${results.length} checks passed`)
   process.exit(0)

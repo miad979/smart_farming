@@ -1034,28 +1034,43 @@ async function fetchLiveWeatherWithFallback(rawLat, rawLng) {
   return pending
 }
 
+// Typical Bangladesh yields in tonnes per acre (BBS/DAE averages, rounded): paddy, wheat, maize, potato, mixed vegetables.
+const CROP_BASELINE_YIELD_T_PER_ACRE = { Rice: 1.9, Wheat: 1.4, Maize: 3.0, Potato: 8.5, Vegetables: 6.0 }
+
 function estimateYieldAdvice({ crop, moisture, weather }) {
-  const cropName = crop || 'Rice'
+  const profile = getIrrigationCropPolicy(crop)
+  const cropName = profile.crop
+  const moistureKnown = Number.isFinite(moisture)
+  const hasWeather = Boolean(weather?.current)
   const humidity = Number(weather?.current?.humidity || 0)
   const rainChance = Number(weather?.forecast?.[0]?.rainfall || 0)
   const temp = Number(weather?.current?.temp || 0)
 
-  const moisturePenalty = moisture < 55 ? 0.25 : moisture > 80 ? 0.1 : 0
+  // Moisture is judged against the crop's own irrigation threshold (rice needs wetter soil than wheat).
+  const deficit = moistureKnown ? Math.max(0, profile.threshold - moisture) : 0
+  const waterlogged = moistureKnown && moisture > Math.min(95, profile.threshold + 25)
+  const moisturePenalty = Math.min(0.3, deficit * 0.012) + (waterlogged ? 0.08 : 0)
   const rainPenalty = rainChance > 75 ? 0.12 : 0
   const tempPenalty = temp > 35 ? 0.1 : 0
   const humidityPenalty = humidity > 85 ? 0.08 : 0
   const totalPenalty = Math.min(0.45, moisturePenalty + rainPenalty + tempPenalty + humidityPenalty)
 
-  const baseYield = 4.2
+  const baseYield = CROP_BASELINE_YIELD_T_PER_ACRE[cropName] || CROP_BASELINE_YIELD_T_PER_ACRE.Rice
   const expected = Number((baseYield * (1 - totalPenalty)).toFixed(2))
   const deltaPct = Number((((expected - baseYield) / baseYield) * 100).toFixed(1))
 
   const adviceEn = []
   const adviceBn = []
 
-  if (moisture < 55) {
-    adviceEn.push('Soil moisture is low. Irrigate within the next 6-8 hours.')
-    adviceBn.push('মাটির আর্দ্রতা কম। আগামী ৬-৮ ঘন্টার মধ্যে সেচ দিন।')
+  if (!moistureKnown) {
+    adviceEn.push('No soil moisture reading yet. Connect your sensor on the Irrigation page for a better estimate.')
+    adviceBn.push('এখনও মাটির আর্দ্রতার তথ্য নেই। সঠিক অনুমানের জন্য সেচ পাতায় সেন্সর যুক্ত করুন।')
+  } else if (deficit > 0) {
+    adviceEn.push(`Soil moisture (${Math.round(moisture)}%) is below the ${profile.threshold}% needed for ${cropName.toLowerCase()}. Irrigate within the next 6-8 hours.`)
+    adviceBn.push(`মাটির আর্দ্রতা (${Math.round(moisture)}%) ${profile.crop_bn}-এর প্রয়োজনীয় ${profile.threshold}%-এর নিচে। আগামী ৬-৮ ঘন্টার মধ্যে সেচ দিন।`)
+  } else if (waterlogged) {
+    adviceEn.push('Soil is very wet. Pause irrigation and check drainage to avoid root damage.')
+    adviceBn.push('মাটি খুব ভেজা। শিকড়ের ক্ষতি এড়াতে সেচ বন্ধ রাখুন ও পানি নিষ্কাশন দেখুন।')
   }
   if (rainChance > 70) {
     adviceEn.push('High rain probability. Avoid over-irrigation and ensure drainage.')
@@ -1074,20 +1089,25 @@ function estimateYieldAdvice({ crop, moisture, weather }) {
     adviceEn.push('Current conditions are favorable. Maintain current irrigation schedule.')
     adviceBn.push('বর্তমান অবস্থা অনুকূল। বর্তমান সেচ সূচি বজায় রাখুন।')
   }
+  if (!hasWeather) {
+    adviceEn.push('Live weather is unavailable right now, so rain and heat are not included in this estimate.')
+    adviceBn.push('এই মুহূর্তে লাইভ আবহাওয়া পাওয়া যাচ্ছে না, তাই এই অনুমানে বৃষ্টি ও তাপমাত্রা ধরা হয়নি।')
+  }
 
   return {
     crop: cropName,
-    crop_bn: cropName,
+    crop_bn: profile.crop_bn,
     expectedYieldTonsPerAcre: expected,
+    baselineYieldTonsPerAcre: baseYield,
     deltaPercent: deltaPct,
     trend: deltaPct >= 0 ? 'up' : 'down',
     advice_en: adviceEn,
     advice_bn: adviceBn,
     basedOn: {
-      moisture,
-      humidity,
-      rainChance,
-      temperature: temp,
+      moisture: moistureKnown ? moisture : null,
+      humidity: hasWeather ? humidity : null,
+      rainChance: hasWeather ? rainChance : null,
+      temperature: hasWeather ? temp : null,
     },
     updatedAt: nowIso(),
   }
@@ -4541,10 +4561,13 @@ function createLocalApiMiddleware() {
       if (method === 'GET' && pathname === '/yield/advice') {
         const lat = Number(url.searchParams.get('lat') || '23.8103')
         const lng = Number(url.searchParams.get('lng') || '90.4125')
-        const moisture = Number(url.searchParams.get('moisture') || '68')
+        // Moisture is optional: without a sensor reading the estimate must not assume one.
+        const moistureParam = url.searchParams.get('moisture')
+        const moisture = moistureParam === null || moistureParam === '' ? undefined : Number(moistureParam)
         const crop = url.searchParams.get('crop') || 'Rice'
 
-        if (Number.isNaN(lat) || Number.isNaN(lng) || Number.isNaN(moisture)) {
+        if (Number.isNaN(lat) || Number.isNaN(lng) || Number.isNaN(moisture)
+          || Math.abs(lat) > 90 || Math.abs(lng) > 180 || (moisture !== undefined && (moisture < 0 || moisture > 100))) {
           return send(res, 400, { error: 'Invalid advisory parameters' })
         }
 

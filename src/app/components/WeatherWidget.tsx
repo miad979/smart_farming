@@ -168,21 +168,27 @@ export const WeatherWidget: React.FC = () => {
         ? 'লাইভ লোকেশন পাওয়া যায়নি, ঢাকা এলাকার আবহাওয়া দেখানো হচ্ছে'
         : 'Live location unavailable, showing Dhaka area weather';
 
+    let requestSeq = 0;
     const loadWeather = async (coords?: { lat: number; lng: number }) => {
+      // Only the newest request may update the widget: a slow fallback (Dhaka) reply must not
+      // overwrite the GPS location's weather that arrived first.
+      const seq = ++requestSeq;
+      const isLatest = () => mounted && seq === requestSeq;
       try {
         const lastKnownCoords = getLastKnownLocation();
         const resolvedCoords = coords || coordsRef.current || lastKnownCoords || FALLBACK_COORDS;
 
-        coordsRef.current = resolvedCoords;
+        // Keep "no coordinates yet" as null so a GPS fix still counts as a move.
+        if (coords || coordsRef.current || lastKnownCoords) coordsRef.current = resolvedCoords;
         const { lat, lng } = resolvedCoords;
         const data = await getCurrentWeatherData(lat, lng);
-        if (mounted) {
+        if (isLatest()) {
           setWeather(data);
           setWeatherError(fallbackModeRef.current ? fallbackMessage : null);
         }
       } catch (error) {
         console.error('Failed to load live weather:', error);
-        if (mounted) {
+        if (isLatest()) {
           setWeatherError(
             lang === 'bn'
               ? 'আবহাওয়ার তথ্য লোড করা যায়নি, কিছুক্ষণ পরে আবার চেষ্টা করুন'
@@ -380,7 +386,9 @@ export const WeatherWidget: React.FC = () => {
         </div>
 
         <div className="rounded-xl border border-border/60 bg-background/70 p-3 mb-4 shadow-sm">
-          <p className="text-xs text-muted-foreground mb-1">{lang === 'bn' ? 'রিয়েল লোকেশন' : 'Real location'}</p>
+          <p className="text-xs text-muted-foreground mb-1">{usingFallbackLocation
+              ? (lang === 'bn' ? 'ডিফল্ট এলাকা (লোকেশন বন্ধ)' : 'Default area (location off)')
+              : (lang === 'bn' ? 'আপনার লোকেশন' : 'Your location')}</p>
           <p className="text-sm font-semibold text-foreground">{locationLabel}</p>
         </div>
 
@@ -464,7 +472,7 @@ export const WeatherWidget: React.FC = () => {
         </div>
 
         <div className="rounded-xl border border-border/60 bg-background/70 p-4 mb-5 shadow-sm">
-          <p className="font-bold text-sm mb-3">{lang === 'bn' ? 'রিয়েল লোকেশন আবহাওয়ার বিস্তারিত' : 'Real location weather details'}</p>
+          <p className="font-bold text-sm mb-3">{lang === 'bn' ? 'আবহাওয়ার বিস্তারিত' : 'Weather details'}</p>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
             <div className="rounded-lg border border-border/50 p-2">
               <p className="text-muted-foreground">{lang === 'bn' ? 'বাতাসের দিক' : 'Wind direction'}</p>
@@ -583,7 +591,7 @@ export const WeatherWidget: React.FC = () => {
               {typeof day.uvIndex === 'number' && (
                 <p className="text-xs text-amber-600 mt-1 font-semibold">UV {day.uvIndex}</p>
               )}
-              {day.precipitationSum && day.precipitationSum > 0 && (
+              {Number(day.precipitationSum) > 0 && (
                 <p className="text-xs text-cyan-600 mt-1 font-semibold">{day.precipitationSum}mm</p>
               )}
             </div>

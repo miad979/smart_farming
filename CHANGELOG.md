@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Voice questions (speech-to-text, বাংলা/English) in the disease assistant chat
 - Live account alerts (`alerts:{userId}`): doctor verification decisions now notify the doctor and unlock the panel without re-login
 - `npm run test:consultations` end-to-end workflow test (14 checks)
-- `npm run test:weather`: live weather workflow test with simulated providers (7 checks, runs in CI)
+- `npm run test:weather`: live weather workflow test with simulated providers (8 checks, runs in CI)
 - Optional `WEATHER_PROVIDERS` env var to set the weather provider order (default `open-meteo,met-norway`)
 - Weather widget: "Use my location" and "Try again" buttons
 - `npm run dev:lan` to open the dev server from a phone on the same Wi-Fi
@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Admin "Weekly Activity" chart now shows real detections and consultations (`GET /api/admin/activity`)
 
 ### Fixed
+- Dashboard: each card loads on its own (one failing request no longer blanks the others), with a refresh button, a "some data could not load" notice, and an automatic refresh when you return to the tab
+- Dashboard: a new disease scan appears immediately (realtime); the "Possible disease" badge only shows when there is a scan, and a healthy scan shows "Healthy"
+- Dashboard: crop price shows your own market first (profile location, then Dhaka) with its real unit; the weekly usage chart shows a clear message when no water was used
+- Dashboard: Bangla digits and units throughout; no invented values while loading or for guests
+- Yield forecast used 4.2 t/acre for every crop and assumed 68% moisture when there was no sensor reading; it now uses typical Bangladesh yields per crop, judges moisture against each crop's own threshold, and rejects out-of-range input
+- Weather widget could show the Dhaka fallback instead of your GPS location when the replies arrived out of order; the location label now says when the default area is used
+- Weather widget showed a stray "0" under dry forecast days
+- Flaky consultation and irrigation tests (database edits within the same millisecond were not picked up)
 - Live weather returned HTTP 500 on the deployed server: requests now time out after 8 s, Open-Meteo is retried once on transient errors, MET Norway is used as a fallback, a recent cached forecast is served if every provider fails, and otherwise a clear 503 is returned instead of a crash
 - Hourly rain forecast window was computed in server UTC instead of the farm's local time zone
 - Place names used a non-existent geocoding endpoint (now OpenStreetMap Nominatim, cached 24 h)
